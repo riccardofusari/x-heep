@@ -96,6 +96,8 @@ ${pad.core_v_mini_mcu_interface}
   import core_v_mini_mcu_pkg::*;
   import cv32e40p_apu_core_pkg::*;
   import power_manager_pkg::*;
+  import bus_sniffer_pkg::*;  // Import the bus_sniff_bundle_t
+
 
   localparam NUM_BYTES = core_v_mini_mcu_pkg::MEM_SIZE;
   localparam DM_HALTADDRESS = core_v_mini_mcu_pkg::DEBUG_START_ADDRESS + 32'h00000800; //debug rom code (section .text in linker) starts at 0x800
@@ -188,6 +190,51 @@ ${pad.core_v_mini_mcu_interface}
   logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] memory_subsystem_banks_set_retentive_n;
   logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] memory_subsystem_banks_powergate_iso_n;
   logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] memory_subsystem_clkgate_en_n;
+
+  /* Clock stepping module*/
+  //logic         dbg_en_gated_clk;
+  //logic [31:0]  dbg_clk_cycles;
+  //logic         dbg_stepping_trigger;
+  //logic         dbg_gated_clk;
+  //logic         dbg_clk_running;
+  //logic [31:0]  dbg_cycles_left;
+
+
+  // Create the bus sniffing bundle
+  bus_sniffer_bundle_t bus_sniffer_bundle;
+  logic bus_sniffer_s_i;
+
+  // Assign signals to the bus_sniff_bundle
+  always_comb begin
+    // Core-related signals
+    bus_sniffer_bundle.core_instr_req           = core_instr_req;
+    bus_sniffer_bundle.core_instr_resp          = core_instr_resp;
+    bus_sniffer_bundle.core_data_req            = core_data_req;
+    bus_sniffer_bundle.core_data_resp           = core_data_resp;
+
+    // DMA-related signals
+    bus_sniffer_bundle.dma_read_req             = dma_read_req;
+    bus_sniffer_bundle.dma_read_resp            = dma_read_resp;
+    bus_sniffer_bundle.dma_write_req            = dma_write_req;
+    bus_sniffer_bundle.dma_write_resp           = dma_write_resp;
+    bus_sniffer_bundle.dma_addr_req             = dma_addr_req;
+    bus_sniffer_bundle.dma_addr_resp            = dma_addr_resp;
+
+    // Peripherals signals
+    bus_sniffer_bundle.ao_peripheral_slave_req  = ao_peripheral_slave_req;
+    bus_sniffer_bundle.ao_peripheral_slave_resp = ao_peripheral_slave_resp;
+    bus_sniffer_bundle.peripheral_slave_req     = peripheral_slave_req;
+    bus_sniffer_bundle.peripheral_slave_resp    = peripheral_slave_resp;
+
+    // RAM signals
+    bus_sniffer_bundle.ram_slave_req            = ram_slave_req;
+    bus_sniffer_bundle.ram_slave_resp           = ram_slave_resp;
+
+    // Memory Map SPI Region
+    bus_sniffer_bundle.flash_mem_slave_req      = flash_mem_slave_req;
+    bus_sniffer_bundle.flash_mem_slave_resp     = flash_mem_slave_resp;
+  end
+
 
   //pwrgate exposed outside for UPF sim flow and switch cells
   assign cpu_subsystem_powergate_switch_no    = cpu_subsystem_pwr_ctrl_out.pwrgate_en_n;
@@ -296,6 +343,17 @@ ${pad.core_v_mini_mcu_interface}
       .debug_req_i(debug_core_req),
       .core_sleep_o(core_sleep)
   );
+
+  //clk_stepping_dbg clk_stepping_dbg_i (
+  //    .clk_i(clk_i),
+  //    .rst_ni(rst_ni),
+  //    .en_i(dbg_en_gated_clk),
+  //    .cycles_i(dbg_clk_cycles),
+  //    .cycle_start_i(dbg_stepping_trigger),
+  //    .clk_o(dbg_gated_clk),
+  //    .running_o(dbg_clk_running),
+  //    .cycles_left_o(dbg_cycles_left)
+  //);
 
   debug_subsystem #(
       .NRHARTS    (NRHARTS),
@@ -506,7 +564,9 @@ ${pad.core_v_mini_mcu_interface}
       .i2s_sd_o(i2s_sd_o),
       .i2s_sd_oe_o(i2s_sd_oe_o),
       .i2s_sd_i(i2s_sd_i),
-      .i2s_rx_valid_o(i2s_rx_valid)
+      .i2s_rx_valid_o(i2s_rx_valid),
+      .bus_sniffer_bundle_i(bus_sniffer_bundle),
+      .bus_sniffer_s_o(bus_sniffer_s_i)
   );
 
   // Debug_req assign

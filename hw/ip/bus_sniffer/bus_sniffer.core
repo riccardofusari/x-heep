@@ -1,0 +1,22 @@
+CAPI=2:
+
+name: "x-heep:ip:bus_sniffer"
+description: "core-v-mini-mcu bus sniffer peripheral"
+
+filesets:
+  files_rtl:
+    depend:
+      - pulp-platform.org::common_cells
+    files:
+      - rtl/bus_sniffer_reg_pkg.sv 
+      - rtl/bus_sniffer_reg_top.sv 
+      - rtl/bus_sniffer_pkg.sv 
+      - rtl/fifo_bus_sniffer.sv
+      - rtl/bus_sniffer.sv 
+    
+    file_type: systemVerilogSource
+
+targets:
+  default:
+    filesets:
+    - files_rtl

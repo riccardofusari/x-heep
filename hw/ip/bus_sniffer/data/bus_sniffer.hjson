@@ -1,0 +1,67 @@
+{
+  name: "bus_sniffer"
+  clock_primary: "clk_i"
+  bus_interfaces: [
+    { protocol: "reg_iface", direction: "device" }
+  ]
+  regwidth: "32"
+  registers: [
+    {
+      name: "SNI_CTRL"
+      desc: "Control register: Bit0 enables the bus sniffer; Bit1 resets the FIFO."
+      swaccess: "rw"
+      hwaccess: "hro"
+      fields: [
+        { bits: "0",   name: "EN",      desc: "Enable bus sniffer" }
+        { bits: "1",   name: "RST_FIFO", desc: "Reset FIFO buffer" }
+      ]
+    }
+    {
+      name: "SNI_STATUS"
+      desc: "Status register: Bit0 = EMPTY, Bit1 = FULL, Bit2 = FRAME_AVAIL."
+      swaccess: "ro"
+      hwaccess: "hrw"
+      fields: [
+        { bits: "0", name: "EMPTY",      desc: "FIFO is empty" }
+        { bits: "1", name: "FULL",       desc: "FIFO is full" }
+        { bits: "2", name: "FRAME_AVAIL",desc: "Frame available" }
+      ]
+    }
+    {
+      name: "SNI_DATA0"
+      desc: "Data register 0: Upper 32 bits of captured frame."
+      swaccess: "ro"
+      hwaccess: "hrw"
+      fields: [
+        { bits: "31:0", name: "DATA", desc: "Bits 127:96" }
+      ]
+    }
+    {
+      name: "SNI_DATA1"
+      desc: "Data register 1: Next 32 bits of captured frame."
+      swaccess: "ro"
+      hwaccess: "hrw"
+      fields: [
+        { bits: "31:0", name: "DATA", desc: "Bits 95:64" }
+      ]
+    }
+    {
+      name: "SNI_DATA2"
+      desc: "Data register 2: Next 32 bits of captured frame."
+      swaccess: "ro"
+      hwaccess: "hrw"
+      fields: [
+        { bits: "31:0", name: "DATA", desc: "Bits 63:32" }
+      ]
+    }
+    {
+      name: "SNI_DATA3"
+      desc: "Data register 3: Lower 32 bits of captured frame."
+      swaccess: "ro"
+      hwaccess: "hrw"
+      fields: [
+        { bits: "31:0", name: "DATA", desc: "Bits 31:0" }
+      ]
+    }
+  ]
+}
