@@ -5,6 +5,7 @@
 module peripheral_subsystem
   import obi_pkg::*;
   import reg_pkg::*;
+  import bus_sniffer_pkg::*;
 #(
     //do not touch these parameters
     parameter NEXT_INT_RND = core_v_mini_mcu_pkg::NEXT_INT == 0 ? 1 : core_v_mini_mcu_pkg::NEXT_INT
@@ -89,7 +90,12 @@ module peripheral_subsystem
     // PDM2PCM Interface
     output logic pdm2pcm_clk_o,
     output logic pdm2pcm_clk_en_o,
-    input  logic pdm2pcm_pdm_i
+    input  logic pdm2pcm_pdm_i,
+
+    //Bus sniffer interface
+    output logic bus_sniffer_full,
+    output logic bus_sniffer_clk_gate_o,
+    input bus_sniffer_bundle_t bus_sniffer_bundle_i
 );
 
   import core_v_mini_mcu_pkg::*;
@@ -469,5 +475,26 @@ module peripheral_subsystem
       .intr_i2s_event_o(i2s_intr_event),
       .i2s_rx_valid_o(i2s_rx_valid_o)
   );
+
+
+
+  localparam FRAME_WIDTH = 128;
+  localparam FIFO_DEPTH = 16384;
+
+  bus_sniffer #(
+      .reg_req_t  (reg_pkg::reg_req_t),
+      .reg_rsp_t  (reg_pkg::reg_rsp_t),
+      .FRAME_WIDTH(FRAME_WIDTH),
+      .FIFO_DEPTH (FIFO_DEPTH)
+  ) bus_sniffer_i (
+      .clk_i               (clk_i),
+      .rst_ni              (rst_ni),
+      .reg_req_i           (peripheral_slv_req[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
+      .reg_rsp_o           (peripheral_slv_rsp[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
+      .bus_sniffer_bundle_i(bus_sniffer_bundle_i),
+      .clk_gate_o          (bus_sniffer_clk_gate_o),
+      .halt_state_o        (bus_sniffer_full)
+  );
+
 
 endmodule : peripheral_subsystem

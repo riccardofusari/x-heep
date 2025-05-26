@@ -202,7 +202,6 @@ ${pad.core_v_mini_mcu_interface}
 
   // Create the bus sniffing bundle
   bus_sniffer_bundle_t bus_sniffer_bundle;
-  logic bus_sniffer_s_i;
 
   // Assign signals to the bus_sniff_bundle
   always_comb begin
@@ -235,6 +234,9 @@ ${pad.core_v_mini_mcu_interface}
     bus_sniffer_bundle.flash_mem_slave_resp     = flash_mem_slave_resp;
   end
 
+  // Halt when bus_sniffer is full
+  logic bus_sniffer_full;
+  logic [NRHARTS-1:0] dm_req_or;
 
   //pwrgate exposed outside for UPF sim flow and switch cells
   assign cpu_subsystem_powergate_switch_no    = cpu_subsystem_pwr_ctrl_out.pwrgate_en_n;
@@ -566,18 +568,21 @@ ${pad.core_v_mini_mcu_interface}
       .i2s_sd_i(i2s_sd_i),
       .i2s_rx_valid_o(i2s_rx_valid),
       .bus_sniffer_bundle_i(bus_sniffer_bundle),
-      .bus_sniffer_s_o(bus_sniffer_s_i)
+      .bus_sniffer_full(bus_sniffer_full)
   );
+
+  //Bus sniffer halt
+  assign dm_req_or = debug_req | {NRHARTS{bus_sniffer_full}};
 
   // Debug_req assign
   if (NRHARTS == 1) begin
-    assign debug_core_req = debug_req;
-    assign ext_debug_req_o  = 1'b0;
+    assign debug_core_req  = dm_req_or;
+    assign ext_debug_req_o = 1'b0;
   end else begin
     always @(*) begin
       for (int i = 0; i < NRHARTS; i++) begin
-        if (i == 0) debug_core_req = debug_req[i];
-        else ext_debug_req_o[i-1] = debug_req[i];
+        if (i == 0) debug_core_req = dm_req_or[i];
+        else ext_debug_req_o[i-1] = dm_req_or[i];
       end
     end
   end

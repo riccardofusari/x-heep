@@ -17,13 +17,14 @@ module bus_sniffer
     output reg_rsp_t reg_rsp_o,
 
 
-    output logic                sniffer_tdo_o,
+    output logic                halt_state_o,
+    output logic                clk_gate_o,
     input  bus_sniffer_bundle_t bus_sniffer_bundle_i
 );
 
 
-  // Interface signals
-  // logic [1:0] sni_ctrl;
+  // Memory mapped registers interface signals
+
   logic [31:0] sni_data0;
   logic [31:0] sni_data1;
   logic [31:0] sni_data2;
@@ -32,6 +33,30 @@ module bus_sniffer
   /* verilator lint_off UNUSED */
   bus_sniffer_reg2hw_t reg2hw;
   bus_sniffer_hw2reg_t hw2reg;
+  logic rst_fifo_reg;
+  logic rst_fifo;
+  logic frame_read_sw;
+  logic enable_gating_reg;
+
+  assign hw2reg.sni_status.empty.de       = 1'b1;
+  assign hw2reg.sni_status.full.de        = 1'b1;
+  assign hw2reg.sni_status.frame_avail.de = 1'b1;
+  assign hw2reg.sni_status.empty.d        = empty;
+  assign hw2reg.sni_status.full.d         = full;
+  assign hw2reg.sni_status.frame_avail.d  = pop_fifo;
+
+  assign hw2reg.sni_data0.de              = 1'b1;
+  assign hw2reg.sni_data1.de              = 1'b1;
+  assign hw2reg.sni_data2.de              = 1'b1;
+  assign hw2reg.sni_data3.de              = 1'b1;
+  assign hw2reg.sni_data0.d               = sni_data0;
+  assign hw2reg.sni_data1.d               = sni_data1;
+  assign hw2reg.sni_data2.d               = sni_data2;
+  assign hw2reg.sni_data3.d               = sni_data3;
+
+  assign rst_fifo_reg                     = reg2hw.sni_ctrl.rst_fifo;
+  assign frame_read_sw                    = reg2hw.sni_ctrl.frame_read;
+  assign enable_gating_reg                = reg2hw.sni_ctrl.enable_gating;
 
 
   //--------------------------------------------------------------------------
@@ -52,14 +77,17 @@ module bus_sniffer
   logic [FRAME_WIDTH-1:0] fifo_data_in;
   logic [FRAME_WIDTH-1:0] fifo_data_out;
   logic full, empty;
-  // logic [$clog2(FIFO_DEPTH):0] fifo_count;
+
+  // Reset logic
+  assign rst_fifo = rst_fifo_reg || !rst_ni;
+
 
   fifo_bus_sniffer #(
       .DATA_WIDTH(FRAME_WIDTH),
       .DEPTH(FIFO_DEPTH)
   ) fifo_bus_sniffer_inst (
       .clk(clk_i),
-      .rst_ni(rst_ni),
+      .rst_ni(~rst_fifo),
       .wr_en(push_fifo),
       .rd_en(pop_fifo),
       .data_in(fifo_data_in),
@@ -109,8 +137,6 @@ module bus_sniffer
       //---------------------------------------------------------------
       // Check all channels in priority order
       //---------------------------------------------------------------
-      // List of channels to check (priority order)
-
 
       // Iterate through channels
       for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
@@ -415,7 +441,7 @@ module bus_sniffer
   end
 
   //------------------------------------------------------------------------ 
-  // Push logic
+  // FIFO Push logic
   //------------------------------------------------------------------------ 
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -427,7 +453,7 @@ module bus_sniffer
       push_fifo <= 1'b0;
 
       // If we found a complete entry AND FIFO not full, push it
-      if (push_idx != -1 && !full) begin
+      if (push_idx != -1 && !full /*&& !halt_stat*/) begin
         push_fifo    <= 1'b1;  // 1-cycle pulse
         fifo_data_in <= transaction_table[push_idx].frame;
         // Mark that entry as free
@@ -436,70 +462,166 @@ module bus_sniffer
     end
   end
 
-  //------------------------------------------------------------------------ 
-  // Pop logic
-  //------------------------------------------------------------------------ 
 
-  logic pop_condition, pop_condition_d;
-  assign pop_condition = (!shifting && !empty);
+  // ---------------------------------------------------------------------------
+  // FIFO pop logic
+  // ---------------------------------------------------------------------------
 
-  // Delay the condition by one cycle.
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) pop_condition_d <= 1'b0;
-    else pop_condition_d <= pop_condition;
-  end
+  // Sample the negedge of the run_enable of the clock gating, to do the first pop
+  logic run_enable_q;
+  wire  initial_pop = run_enable_q & ~run_enable;
 
-  // pop_fifo is high only when pop_condition rises (i.e., it is true now and was false in the previous cycle)
-  assign pop_fifo = pop_condition && !pop_condition_d;
-
-
-  //--------------------------------------------------------------------------
-  // Shift-Out Logic:
-  // Load a frame from the FIFO into a shift register and shift it out LSB-first.
-  //--------------------------------------------------------------------------
-
-  int   shift_count;
-  logic shifting;
-  typedef logic [FRAME_WIDTH-1:0] shift_reg_t;
-  shift_reg_t shift_reg;
-
-  function automatic shift_reg_t frame_to_bits(bus_sniffer_frame_t f);
-    shift_reg_t bits;
-    bits = {
-      f.source_id,  // [127:124]
-      f.req_timestamp,  // [123:108]
-      f.resp_timestamp,  // [107:92]
-      f.address,  // [91:60]
-      f.data,  // [59:28]
-      f.byte_enable,  // [27:24]
-      f.we,  // [23]
-      f.valid,  // [22]
-      f.gnt,  // [21]
-      f.reserved  // [20:0]
-    };
-    return bits;
-  endfunction
+   always_ff @(posedge clk_i or negedge rst_ni) begin
+     if (!rst_ni) begin
+       run_enable_q <= 1'b1;
+     end else begin
+       run_enable_q <= run_enable;        // sample last cycle’s run_enable
+     end
+   end
 
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      shift_reg   <= '0;
-      shift_count <= 0;
-      shifting    <= 1'b0;
+      pop_fifo <= 1'b0;
     end else begin
-      if (pop_fifo) begin
-        shift_reg   <= frame_to_bits(fifo_data_out);
-        shift_count <= 0;
-        shifting    <= 1'b1;
-      end else if (shifting) begin
-        if (shift_count == (FRAME_WIDTH - 1)) shifting <= 1'b0;
-        shift_count <= shift_count + 1;
+      pop_fifo <= 1'b0;                               // default: no pop
+
+      // 1) FIFO just became full → generate first pop
+      // if (/*halt_pulse*/!run_enable) begin
+      //   pop_fifo <= 1'b1;
+
+      if (initial_pop) begin
+         pop_fifo <= 1'b1;
+
+      // 2) SW read-ack while frames remain
+      end else if (frame_read_sw && !empty) begin
+        pop_fifo <= 1'b1;
       end
     end
   end
 
-  wire shift_bit = shift_reg[shift_count];
-  assign sniffer_tdo_o = shifting ? shift_bit : 1'b0;
+
+  // ---------------------------------------------------------------------------
+  // FIFO-full edge detector
+  // ---------------------------------------------------------------------------
+  logic full_q;               // full flag one cycle ago
+  logic halt_pulse;           // 1-clk pulse that replaces former halt_state
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      full_q     <= 1'b0;
+    end else begin
+      full_q     <= full;              // remember previous level
+    end
+  end
+
+  assign halt_pulse =  (full & ~full_q) && run_enable; // rising edge of "full"
+  assign halt_state_o = halt_pulse;    // this now goes to debug_req
+
+
+  // ------------------------------------------------------------------
+  // Software‐enable bit from control register
+  // ------------------------------------------------------------------
+
+  logic gated_active;
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)
+      gated_active <= 1'b0;
+    else if (enable_gating_reg)
+      gated_active <= 1'b1;
+    else
+      gated_active <= 1'b0;
+  end
+
+
+  // ------------------------------------------------------------------
+  // Countdown then gate core clock
+  // ------------------------------------------------------------------
+  parameter int HALT_REQ_CYCLES = 15000;
+  logic [$clog2(HALT_REQ_CYCLES+1)-1:0] halt_req_cnt;
+  logic run_enable;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      halt_req_cnt <= 0;
+      run_enable   <= 1;
+    end else if (!gated_active) begin
+      // before gating is enabled, always leave CPU running
+      halt_req_cnt <= 0;
+      run_enable   <= 1;
+    end else if (halt_pulse) begin
+      // we detected FIFO-full → give the CPU N more cycles, then stop
+      /* verilator lint_off WIDTH */
+      halt_req_cnt <= HALT_REQ_CYCLES;
+      run_enable   <= 1;
+    end else if (halt_req_cnt != 0) begin
+      // counting down
+      halt_req_cnt <= halt_req_cnt - 1;
+      if (halt_req_cnt == 1)
+        run_enable <= 0;
+    end else if (empty) begin
+      // once FIFO is empty, immediately re-open clock
+      run_enable <= 1;
+    end
+    // otherwise hold the previous run_enable
+  end
+
+  assign clk_gate_o = run_enable;
+
+
+  // ————————————————————————————————————————————————————————————————
+  // simple “self–drive” for frame_read in pure sim:
+  // whenever we pop, reload frame_read_delay_cnt to 2;
+  // counts down every cycle; when it hits 1 we assert a dummy
+  // read–ack pulse so we pop the next frame automatically.
+  //———————————————————————————————————————————————————————————————
+  // logic [1:0] frame_read_delay_cnt;
+  // always_ff @(posedge clk_i or negedge rst_ni) begin
+  //   if (!rst_ni) begin
+  //     frame_read_delay_cnt <= 2'd0;
+  //   end else if (pop_fifo) begin
+  //     // we just popped a frame — start a 2‑cycle countdown
+  //     frame_read_delay_cnt <= 2'd2;
+  //   end else if (frame_read_delay_cnt != 0) begin
+  //     frame_read_delay_cnt <= frame_read_delay_cnt - 2'd1;
+  //   end
+  // end
+
+
+  // // combine real SW-driven flag with our sim‑only pulse:
+  // wire frame_read_ack = frame_read_sw || (frame_read_delay_cnt == 2'd1);
+  // // internal state
+  // logic halt_state;
+
+  // always_ff @(posedge clk_i or negedge rst_ni) begin
+  //   if (!rst_ni) begin
+  //     halt_state <= 1'b0;
+  //     pop_fifo   <= 1'b0;
+  //   end else begin
+  //     // default: no pop this cycle
+  //     pop_fifo <= 1'b0;
+
+  //     // 1) FIFO just hit full?
+  //     if (full && !halt_state) begin
+  //       // enter halt state, pop the first stored frame
+  //       halt_state <= 1'b1;
+  //       pop_fifo   <= 1'b1;
+
+  //       // 2) already halted and SW told us it read the last frame?
+  //     end else if (halt_state && frame_read_sw && !empty) begin
+  //       // pop the next frame
+  //       pop_fifo <= 1'b1;
+  //     end
+
+  //     // 3) once FIFO completely drains, clear halt_state
+  //     if (empty) begin
+  //       halt_state <= 1'b0;
+  //     end
+  //   end
+  // end
+
+  // assign halt_state_o = halt_state;
+
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -514,23 +636,6 @@ module bus_sniffer
       sni_data3 <= fifo_data_out[31:0];
     end
   end
-
-  assign hw2reg.sni_status.empty.de       = 1'b1;
-  assign hw2reg.sni_status.full.de        = 1'b1;
-  assign hw2reg.sni_status.frame_avail.de = 1'b1;
-  assign hw2reg.sni_status.empty.d        = empty;
-  assign hw2reg.sni_status.full.d         = full;
-  assign hw2reg.sni_status.frame_avail.d  = pop_fifo;
-
-  assign hw2reg.sni_data0.de              = 1'b1;
-  assign hw2reg.sni_data1.de              = 1'b1;
-  assign hw2reg.sni_data2.de              = 1'b1;
-  assign hw2reg.sni_data3.de              = 1'b1;
-  assign hw2reg.sni_data0.d               = sni_data0;
-  assign hw2reg.sni_data1.d               = sni_data1;
-  assign hw2reg.sni_data2.d               = sni_data2;
-  assign hw2reg.sni_data3.d               = sni_data3;
-
 
 
 

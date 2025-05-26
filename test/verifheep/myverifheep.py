@@ -35,6 +35,7 @@
 #           
 
 import subprocess
+import sys
 import re
 import time
 import serial
@@ -45,7 +46,7 @@ import random
 import os
 
 # Set this to True to enable debugging prints
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 def PRINT_DEB(*args, **kwargs):
     if DEBUG_MODE:
@@ -100,7 +101,9 @@ class VerifHeep:
             cmd = f'cd {self.xheep_dir} ; make questasim-sim'
         elif self.target == 'pynq-z2':
             cmd = f"cd {self.xheep_dir} ; make vivado-fpga FPGA_BOARD={self.target} FUSESOC_FLAGS=--flag=use_bscane_xilinx"
-        result_synth = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable="/bin/bash")
+        # result_synth = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable="/bin/bash")
+        result_synth = subprocess.run(cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, executable="/bin/bash")
+
         if ("ERROR" in result_synth.stderr) or ("error" in result_synth.stderr):
             print(result_synth.stderr)
             exit(1)
@@ -148,8 +151,9 @@ class VerifHeep:
             exit(1)
             
     def stopDeb(self):
-        self.gdb.sendcontrol('c')
-        self.gdb.terminate()
+        # if self.target != "verilator" and self.gdb is not None:
+            self.gdb.sendcontrol('c')
+            self.gdb.terminate()
 
     def launchTest(self, example_name, input_size=0, pattern=r'(\d+):(\d+):(\d+)', en_timeout_term=False):
         PRINT_DEB(f"Running test {example_name} with input size {input_size}...")
@@ -169,41 +173,67 @@ class VerifHeep:
 
         # Compile the application
         if self.target == 'verilator' or self.target == 'questasim':
-          app_compile_run_com = f"cd {self.xheep_dir} ; make app PROJECT={example_name}"
+          app_compile_run_com = f"cd {self.xheep_dir} ; make run-app-verilator PROJECT={example_name}"
         else:
           app_compile_run_com = f"cd {self.xheep_dir} ; make app PROJECT={example_name} TARGET={self.target}"
 
-        result_compilation = subprocess.run(app_compile_run_com, shell=True, capture_output=True, text=True)
+        # result_compilation = subprocess.run(app_compile_run_com, shell=True, capture_output=True, text=True)
 
-        if ("Error" in result_compilation.stderr) or ("error" in result_compilation.stderr):
-            print(result_compilation.stderr)
+
+        
+        subprocess.run(app_compile_run_com, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True)
+        
+        # if ("Error" in result_compilation.stderr) or ("error" in result_compilation.stderr):
+        #     print(result_compilation.stderr)
+        #     return
+        # else:
+        #     PRINT_DEB("Compilation successful!")
+        
+        if self.target != "verilator" and self.gdb is not None:
+            self.gdb.sendline('load')
+            self.gdb.expect('(gdb)')
+            try:
+                output = self.gdb.read_nonblocking(size=100, timeout=1)
+                PRINT_DEB("Current gdb output:", output)
+            except pexpect.TIMEOUT:
+                PRINT_DEB("No new output from GDB.")
+
+            # Set a breakpoint at the exit and wait for it
+            self.gdb.sendline('b _exit')
+            self.gdb.expect('(gdb)')
+            self.gdb.sendline('continue')
+            try:
+                self.gdb.expect('Breakpoint', timeout=600)
+            except pexpect.TIMEOUT:
+                print("Timeout! Program didn't answer in time, exiting...")
+            self.gdb.terminate()
+            if en_timeout_term:
+                exit(1)
             return
         else:
-            PRINT_DEB("Compilation successful!")
-        
-        # Run the testbench with gdb
-        self.gdb.sendline('load')
-        self.gdb.expect('(gdb)')
+            print("Skipping GDB load command for simulation target")
+        # # Run the testbench with gdb
+        # self.gdb.sendline('load')
+        # self.gdb.expect('(gdb)')
 
+        # try:
+        #   output = self.gdb.read_nonblocking(size=100, timeout=1)
+        #   PRINT_DEB("Current gdb output:", output)
+        # except pexpect.TIMEOUT:
+        #   PRINT_DEB("No new output from GDB.")
 
-        try:
-          output = self.gdb.read_nonblocking(size=100, timeout=1)
-          PRINT_DEB("Current gdb output:", output)
-        except pexpect.TIMEOUT:
-          PRINT_DEB("No new output from GDB.")
-
-        # Set a breakpoint at the exit and wait for it
-        self.gdb.sendline('b _exit')
-        self.gdb.expect('(gdb)')
-        self.gdb.sendline('continue')
-        try:
-          self.gdb.expect('Breakpoint', timeout=600)
-        except pexpect.TIMEOUT:
-          print("Timeout! Program didn't answer in time, exiting...")
-          self.gdb.terminate()
-          if en_timeout_term:
-            exit(1)
-          return
+        # # Set a breakpoint at the exit and wait for it
+        # self.gdb.sendline('b _exit')
+        # self.gdb.expect('(gdb)')
+        # self.gdb.sendline('continue')
+        # try:
+        #   self.gdb.expect('Breakpoint', timeout=600)
+        # except pexpect.TIMEOUT:
+        #   print("Timeout! Program didn't answer in time, exiting...")
+        #   self.gdb.terminate()
+        #   if en_timeout_term:
+        #     exit(1)
+        #   return
         
         # Wait for serial to finish
         self.serial_thread.join()

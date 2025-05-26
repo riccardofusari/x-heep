@@ -8,22 +8,24 @@
   registers: [
     {
       name: "SNI_CTRL"
-      desc: "Control register: Bit0 enables the bus sniffer; Bit1 resets the FIFO."
+      desc: "Control register: Bit0 enables the bus sniffer; Bit1 resets the FIFO; Bit2 if the frame is stored in sw"
       swaccess: "rw"
       hwaccess: "hro"
       fields: [
-        { bits: "0",   name: "EN",      desc: "Enable bus sniffer" }
-        { bits: "1",   name: "RST_FIFO", desc: "Reset FIFO buffer" }
+        { bits: "0",   name: "EN",            desc: "Enable bus sniffer" }
+        { bits: "1",   name: "RST_FIFO",      desc: "Reset FIFO buffer" }
+        { bits: "2",   name: "FRAME_READ",    desc: "Frame Stored", swaccess: "rw1c" }
+        { bits: "3",   name: "ENABLE_GATING", desc: "Enable the clock gating" }
       ]
     }
     {
       name: "SNI_STATUS"
-      desc: "Status register: Bit0 = EMPTY, Bit1 = FULL, Bit2 = FRAME_AVAIL."
+      desc: "Status register: Bit0 = EMPTY, Bit1 = FULL, Bit2 = FRAME_AVAIL., Bit3 = FRAME_READ"
       swaccess: "ro"
       hwaccess: "hrw"
       fields: [
-        { bits: "0", name: "EMPTY",      desc: "FIFO is empty" }
-        { bits: "1", name: "FULL",       desc: "FIFO is full" }
+        { bits: "0", name: "EMPTY",      desc: "FIFO is empty"   }
+        { bits: "1", name: "FULL",       desc: "FIFO is full"    }
         { bits: "2", name: "FRAME_AVAIL",desc: "Frame available" }
       ]
     }

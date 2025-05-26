@@ -36,6 +36,7 @@ module fifo_bus_sniffer #(
   // We use an extra bit for the counter to represent the range [0, DEPTH].
   logic [ADDR_WIDTH:0] count_reg;
   int count_int;
+  int i;
 
   //-------------------------------------------------------------------------
   // Status signals.
@@ -44,7 +45,6 @@ module fifo_bus_sniffer #(
   assign empty = (count_int == 0);
   assign count = count_reg;
   assign data_out = mem[rd_ptr];
-
   //-------------------------------------------------------------------------
   // FIFO operation:
   // Synchronous FIFO that handles push, pop, and simultaneous operations.
@@ -55,6 +55,11 @@ module fifo_bus_sniffer #(
       rd_ptr    <= '0;
       count_reg <= '0;
       count_int <= 0;
+      /* verilator lint_off BLKSEQ */
+      for (i = 0; i < DEPTH; i++) begin
+        mem[i] = '0;
+      end
+
     end else begin
       case ({
         (wr_en && !full), (rd_en && !empty)

@@ -93,7 +93,7 @@ module peripheral_subsystem
     input  logic pdm2pcm_pdm_i,
 
     //Bus sniffer interface
-    output logic bus_sniffer_s_o,
+    output logic bus_sniffer_full,
     input bus_sniffer_bundle_t bus_sniffer_bundle_i
 );
 
@@ -590,7 +590,7 @@ module peripheral_subsystem
       .reg_req_i(peripheral_slv_req[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
       .reg_rsp_o(peripheral_slv_rsp[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
       .bus_sniffer_bundle_i(bus_sniffer_bundle_i),
-      .sniffer_tdo_o     (bus_sniffer_s_o)
+      .halt_state_o     (bus_sniffer_full)
   );
 
 
