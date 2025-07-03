@@ -490,7 +490,7 @@ module bus_sniffer
       // if (/*halt_pulse*/!run_enable) begin
       //   pop_fifo <= 1'b1;
 
-      if (initial_pop) begin
+      if (/*halt_pulse*/initial_pop/**/) begin
          pop_fifo <= 1'b1;
 
       // 2) SW read-ack while frames remain
@@ -499,6 +499,7 @@ module bus_sniffer
       end
     end
   end
+
 
 
   // ---------------------------------------------------------------------------
@@ -516,7 +517,39 @@ module bus_sniffer
   end
 
   assign halt_pulse =  (full & ~full_q) && run_enable; // rising edge of "full"
-  assign halt_state_o = halt_pulse;    // this now goes to debug_req
+  // assign halt_state_o = halt_pulse;    // this now goes to debug_req
+
+
+  // ---------------------------------------------------------------------------
+  // Debug req
+  // ---------------------------------------------------------------------------
+  logic debug_req_trigger;
+  logic [2:0] debug_req_counter; // Counter per mantenere il segnale
+
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+      if (!rst_ni) begin
+          debug_req_counter <= 3'b0;
+          debug_req_trigger <= 1'b0;
+      end else begin
+          if ((full && halt_pulse) && debug_req_counter == 3'b0) begin
+              // Inizia la sequenza di debug request
+              debug_req_counter <= 3'b1;
+              debug_req_trigger <= 1'b1;
+          end else if (debug_req_counter > 3'b0 && debug_req_counter < 3'b100) begin
+              // Mantieni alto per alcuni cicli (almeno 1, meglio 3-4)
+              debug_req_counter <= debug_req_counter + 1'b1;
+              debug_req_trigger <= 1'b1;
+          end else begin
+              debug_req_trigger <= 1'b0;
+              if (debug_req_counter == 3'b100)
+                  debug_req_counter <= 3'b0; // Reset per prossimo trigger
+          end
+      end
+  end
+
+  // Collegamento al segnale debug_req del core
+  assign halt_state_o = debug_req_trigger;
 
 
   // ------------------------------------------------------------------
@@ -537,7 +570,7 @@ module bus_sniffer
   // ------------------------------------------------------------------
   // Countdown then gate core clock
   // ------------------------------------------------------------------
-  parameter int HALT_REQ_CYCLES = 15000;
+  parameter int HALT_REQ_CYCLES = 15;
   logic [$clog2(HALT_REQ_CYCLES+1)-1:0] halt_req_cnt;
   logic run_enable;
 
@@ -567,6 +600,8 @@ module bus_sniffer
   end
 
   assign clk_gate_o = run_enable;
+
+
 
 
   // ————————————————————————————————————————————————————————————————
