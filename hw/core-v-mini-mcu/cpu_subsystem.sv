@@ -41,7 +41,8 @@ module cpu_subsystem
     output logic [ 4:0] irq_id_o,
 
     // Debug Interface
-    input logic debug_req_i,
+    input  logic debug_req_i,
+    output logic debug_mode_o,
 
     // sleep
     output logic core_sleep_o
@@ -98,6 +99,7 @@ module cpu_subsystem
         .dm_exception_addr_i(32'h0),
         .dm_halt_addr_i(DM_HALTADDRESS),
         .crash_dump_o(),
+        .debug_mode_o,
 
         .fetch_enable_i(fetch_enable),
 

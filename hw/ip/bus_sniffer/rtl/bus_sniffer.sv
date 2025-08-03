@@ -19,7 +19,8 @@ module bus_sniffer
 
     output logic                halt_state_o,
     output logic                clk_gate_o,
-    input  bus_sniffer_bundle_t bus_sniffer_bundle_i
+    input  bus_sniffer_bundle_t bus_sniffer_bundle_i,
+    input  logic                debug_mode_i
 );
 
 
@@ -34,6 +35,7 @@ module bus_sniffer
   bus_sniffer_reg2hw_t reg2hw;
   bus_sniffer_hw2reg_t hw2reg;
   logic rst_fifo_reg;
+  logic rst_fifo_reg_ff;
   logic rst_fifo;
   logic frame_read_sw;
   logic enable_gating_reg;
@@ -78,8 +80,18 @@ module bus_sniffer
   logic [FRAME_WIDTH-1:0] fifo_data_out;
   logic full, empty;
 
+  //Whenever the rst_fifo register is written by the user or the system exits from debug mode, change the value of rst_fifo_reg_ff
+  //rst_fifo_reg_ff is used for sampling the debug mode together with the reset.
+  //This prevent the fifo to fill during debug mode, that will prevent the sigtrap to happen.
+
+  always_ff @(posedge rst_fifo_reg or negedge debug_mode_i) begin
+    if (rst_fifo_reg && debug_mode_i) rst_fifo_reg_ff <= rst_fifo_reg;
+    else if (!debug_mode_i) rst_fifo_reg_ff <= 0;
+
+  end
   // Reset logic
-  assign rst_fifo = rst_fifo_reg || !rst_ni;
+  assign rst_fifo = (debug_mode_i) ? (rst_fifo_reg_ff || !rst_ni) : rst_fifo_reg || !rst_ni;
+
 
 
   fifo_bus_sniffer #(
@@ -453,7 +465,7 @@ module bus_sniffer
       push_fifo <= 1'b0;
 
       // If we found a complete entry AND FIFO not full, push it
-      if (push_idx != -1 && !full /*&& !halt_stat*/) begin
+      if (push_idx != -1 && !full  /*&& !halt_stat*/) begin
         push_fifo    <= 1'b1;  // 1-cycle pulse
         fifo_data_in <= transaction_table[push_idx].frame;
         // Mark that entry as free
@@ -469,31 +481,31 @@ module bus_sniffer
 
   // Sample the negedge of the run_enable of the clock gating, to do the first pop
   logic run_enable_q;
-  wire  initial_pop = run_enable_q & ~run_enable;
+  wire initial_pop = run_enable_q & ~run_enable;
 
-   always_ff @(posedge clk_i or negedge rst_ni) begin
-     if (!rst_ni) begin
-       run_enable_q <= 1'b1;
-     end else begin
-       run_enable_q <= run_enable;        // sample last cycle’s run_enable
-     end
-   end
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      run_enable_q <= 1'b1;
+    end else begin
+      run_enable_q <= run_enable;  // sample last cycle’s run_enable
+    end
+  end
 
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       pop_fifo <= 1'b0;
     end else begin
-      pop_fifo <= 1'b0;                               // default: no pop
+      pop_fifo <= 1'b0;  // default: no pop
 
       // 1) FIFO just became full → generate first pop
       // if (/*halt_pulse*/!run_enable) begin
       //   pop_fifo <= 1'b1;
 
-      if (/*halt_pulse*/initial_pop/**/) begin
-         pop_fifo <= 1'b1;
+      if (  /*halt_pulse*/ initial_pop  /**/) begin
+        pop_fifo <= 1'b1;
 
-      // 2) SW read-ack while frames remain
+        // 2) SW read-ack while frames remain
       end else if (frame_read_sw && !empty) begin
         pop_fifo <= 1'b1;
       end
@@ -505,18 +517,18 @@ module bus_sniffer
   // ---------------------------------------------------------------------------
   // FIFO-full edge detector
   // ---------------------------------------------------------------------------
-  logic full_q;               // full flag one cycle ago
-  logic halt_pulse;           // 1-clk pulse that replaces former halt_state
+  logic full_q;  // full flag one cycle ago
+  logic halt_pulse;  // 1-clk pulse that replaces former halt_state
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      full_q     <= 1'b0;
+      full_q <= 1'b0;
     end else begin
-      full_q     <= full;              // remember previous level
+      full_q <= full;  // remember previous level
     end
   end
 
-  assign halt_pulse =  (full & ~full_q) && run_enable; // rising edge of "full"
+  assign halt_pulse = (full & ~full_q) && run_enable;  // rising edge of "full"
   // assign halt_state_o = halt_pulse;    // this now goes to debug_req
 
 
@@ -524,28 +536,27 @@ module bus_sniffer
   // Debug req
   // ---------------------------------------------------------------------------
   logic debug_req_trigger;
-  logic [2:0] debug_req_counter; // Counter per mantenere il segnale
+  logic [2:0] debug_req_counter;  // Counter per mantenere il segnale
 
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
-      if (!rst_ni) begin
-          debug_req_counter <= 3'b0;
-          debug_req_trigger <= 1'b0;
+    if (!rst_ni) begin
+      debug_req_counter <= 3'b0;
+      debug_req_trigger <= 1'b0;
+    end else begin
+      if ((full && halt_pulse) && debug_req_counter == 3'b0) begin
+        // Inizia la sequenza di debug request
+        debug_req_counter <= 3'b1;
+        debug_req_trigger <= 1'b1;
+      end else if (debug_req_counter > 3'b0 && debug_req_counter < 3'b110) begin
+        // Mantieni alto per alcuni cicli (almeno 1, meglio 3-4)
+        debug_req_counter <= debug_req_counter + 1'b1;
+        debug_req_trigger <= 1'b1;
       end else begin
-          if ((full && halt_pulse) && debug_req_counter == 3'b0) begin
-              // Inizia la sequenza di debug request
-              debug_req_counter <= 3'b1;
-              debug_req_trigger <= 1'b1;
-          end else if (debug_req_counter > 3'b0 && debug_req_counter < 3'b100) begin
-              // Mantieni alto per alcuni cicli (almeno 1, meglio 3-4)
-              debug_req_counter <= debug_req_counter + 1'b1;
-              debug_req_trigger <= 1'b1;
-          end else begin
-              debug_req_trigger <= 1'b0;
-              if (debug_req_counter == 3'b100)
-                  debug_req_counter <= 3'b0; // Reset per prossimo trigger
-          end
+        debug_req_trigger <= 1'b0;
+        if (debug_req_counter == 3'b110) debug_req_counter <= 3'b0;  // Reset per prossimo trigger
       end
+    end
   end
 
   // Collegamento al segnale debug_req del core
@@ -558,12 +569,9 @@ module bus_sniffer
 
   logic gated_active;
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni)
-      gated_active <= 1'b0;
-    else if (enable_gating_reg)
-      gated_active <= 1'b1;
-    else
-      gated_active <= 1'b0;
+    if (!rst_ni) gated_active <= 1'b0;
+    else if (enable_gating_reg) gated_active <= 1'b1;
+    else gated_active <= 1'b0;
   end
 
 
@@ -590,8 +598,7 @@ module bus_sniffer
     end else if (halt_req_cnt != 0) begin
       // counting down
       halt_req_cnt <= halt_req_cnt - 1;
-      if (halt_req_cnt == 1)
-        run_enable <= 0;
+      if (halt_req_cnt == 1) run_enable <= 0;
     end else if (empty) begin
       // once FIFO is empty, immediately re-open clock
       run_enable <= 1;

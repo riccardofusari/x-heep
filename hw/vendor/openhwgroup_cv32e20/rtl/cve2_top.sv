@@ -60,6 +60,7 @@ module cve2_top import cve2_pkg::*; #(
   input  logic [31:0]                  dm_halt_addr_i,
   input  logic [31:0]                  dm_exception_addr_i,
   output crash_dump_t                  crash_dump_o,
+  output logic                         debug_mode_o, //should take this signal into account when filling the fifo
 
   // RISC-V Formal Interface
   // Does not comply with the coding standards of _i/_o suffixes, but follows
@@ -197,6 +198,7 @@ module cve2_top import cve2_pkg::*; #(
     .dm_halt_addr_i,
     .dm_exception_addr_i,
     .crash_dump_o,
+    .debug_mode_o,
 
 `ifdef RVFI
     .rvfi_valid,

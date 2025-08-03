@@ -12,6 +12,8 @@ module peripheral_subsystem
 ) (
     input logic clk_i,
     input logic rst_ni,
+    //debug
+    input logic debug_mode_i, //should take this signal into account when filling the fifo
 
     // Clock-gating signal
     input logic clk_gate_en_ni,
@@ -493,7 +495,8 @@ module peripheral_subsystem
       .reg_rsp_o           (peripheral_slv_rsp[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
       .bus_sniffer_bundle_i(bus_sniffer_bundle_i),
       .clk_gate_o          (bus_sniffer_clk_gate_o),
-      .halt_state_o        (bus_sniffer_full)
+      .halt_state_o        (bus_sniffer_full),
+      .debug_mode_i
   );
 
 

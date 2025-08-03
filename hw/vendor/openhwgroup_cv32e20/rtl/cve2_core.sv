@@ -65,6 +65,7 @@ module cve2_core import cve2_pkg::*; #(
   input  logic [31:0]                  dm_halt_addr_i,
   input  logic [31:0]                  dm_exception_addr_i,
   output crash_dump_t                  crash_dump_o,
+  output logic                         debug_mode_o, //should take this signal into account when filling the fifo
   // SEC_CM: EXCEPTION.CTRL_FLOW.LOCAL_ESC
   // SEC_CM: EXCEPTION.CTRL_FLOW.GLOBAL_ESC
 
@@ -1344,5 +1345,8 @@ module cve2_core import cve2_pkg::*; #(
   assign unused_instr_id_done = instr_id_done;
   assign unused_instr_new_id = instr_new_id;
 `endif
+
+
+  assign debug_mode_o = debug_mode;
 
 endmodule

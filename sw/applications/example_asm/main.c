@@ -61,6 +61,14 @@ int main() {
 //     : "t0", "t1", "t2", "memory"
 //   );
 
+    // Define the base address of the bus_sniffer
+    uintptr_t BUS_SNIFFER_START_ADDRESS = 0x30080000;
+    mmio_region_t bus_sniffer = mmio_region_from_addr(BUS_SNIFFER_START_ADDRESS);
+
+    // Reset FIFO (optional, ensure FIFO is empty at start)
+    mmio_region_write32(bus_sniffer, BUS_SNIFFER_SNI_CTRL_REG_OFFSET, 0x2); // Reset
+    mmio_region_write32(bus_sniffer, BUS_SNIFFER_SNI_CTRL_REG_OFFSET, 0x1); // Enable
+
 
     int num1 = 10;
     int num2 = 20;
@@ -71,5 +79,26 @@ int main() {
     PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
 
 
+    PRINTF("%d+%d=%d\n", num1, num2, sum);
+    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+
+    
+    PRINTF("%d+%d=%d\n", num1, num2, sum);
+    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+    PRINTF("%d+%d=%d\n", num1, num2, sum);
+    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+
+    
+
+    // Check FIFO full status in a loop (or wherever appropriate)
+    // while (1) {
+    //     uint32_t status = mmio_region_read32(bus_sniffer, BUS_SNIFFER_SNI_STATUS_REG_OFFSET);
+    //     if (status & (1 << BUS_SNIFFER_SNI_STATUS_FULL_BIT)) {  // Assuming bit 0 = FIFO full flag (adjust as needed)
+    //         PRINTF("FIFO full! Triggering SIGTRAP.\n");
+    //         raise(5);  // Pause in GDB (SIGTRAP)
+    //         // break;           // Exit loop after trapping (optional)
+    //     }
+    // }
+    PRINTF("Sum is %d.\n", sum);
     return (sum == num1+num2) && (mul == num2*MULTIPLY_CONSTANT) ? EXIT_SUCCESS : EXIT_FAILURE;   
 }

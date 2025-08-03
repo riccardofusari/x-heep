@@ -236,6 +236,7 @@ ${pad.core_v_mini_mcu_interface}
 
   // Halt when bus_sniffer is full
   logic bus_sniffer_full;
+  logic bus_sniffer_clk_gate_o;
   logic [NRHARTS-1:0] dm_req_or;
 
   //pwrgate exposed outside for UPF sim flow and switch cells
@@ -317,6 +318,8 @@ ${pad.core_v_mini_mcu_interface}
     rv_timer_intr[1]
   };
 
+  logic debug_mode; //mohammedk: should take this signal into account when filling the fifo
+
   cpu_subsystem #(
       .BOOT_ADDR(BOOT_ADDR),
       .COREV_PULP(COREV_PULP),
@@ -343,6 +346,7 @@ ${pad.core_v_mini_mcu_interface}
       .irq_ack_o(irq_ack),
       .irq_id_o(irq_id_out),
       .debug_req_i(debug_core_req),
+      .debug_mode_o(debug_mode),
       .core_sleep_o(core_sleep)
   );
 
@@ -568,6 +572,8 @@ ${pad.core_v_mini_mcu_interface}
       .i2s_sd_i(i2s_sd_i),
       .i2s_rx_valid_o(i2s_rx_valid),
       .bus_sniffer_bundle_i(bus_sniffer_bundle),
+      .bus_sniffer_clk_gate_o(bus_sniffer_clk_gate_o),
+      .debug_mode_i(debug_mode),
       .bus_sniffer_full(bus_sniffer_full)
   );
 
