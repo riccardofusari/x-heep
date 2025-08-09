@@ -1,138 +1,188 @@
 #!/usr/bin/env python3
-import pexpect
-import sys
-import re
+import pexpect, re, sys
 
-# Memory‐mapped register addresses (adjust to your mapping!)
-CTRL_ADDR    = 0x30080000   # SNI_CTRL
-STATUS_ADDR  = 0x30080004   # SNI_STATUS
-DATA_ADDR     = 0x30080008  # first of SNI_DATA0–3
+# --- MMIO map
+CTRL_ADDR    = 0x30080000  # SNI_CTRL
+STATUS_ADDR  = 0x30080004  # SNI_STATUS
+DATA_ADDR    = 0x30080008  # SNI_DATA0..3
 
-# Bit‐positions in those registers
-FRAME_READ_BIT   = 1 << 2   # in CTRL: bit2 = FRAME_READ
-FRAME_AVAIL_BIT  = 1 << 2   # in STATUS: bit2 = FRAME_AVAIL
-EMPTY_BIT        = 1 << 0   # in STATUS: bit0 = EMPTY
+# --- CTRL bits (valori consolidati con il tuo RTL)
+EN_BIT            = 1 << 0
+RST_FIFO_BIT      = 1 << 1      # level — write 1 to hold reset, 0 to release
+FRAME_READ_BIT    = 1 << 2      # rw1c — write 1 to ack/advance
+ENABLE_GATING_BIT = 1 << 3      # (non usato ora)
 
-def send_cmd(child, cmd):
+# --- STATUS bits
+EMPTY_BIT        = 1 << 0
+FULL_BIT         = 1 << 1
+FRAME_AVAIL_BIT  = 1 << 2       # sticky (frame_pending nel tuo RTL)
+
+# ------------------------ GDB helpers ------------------------
+
+def gsend(child, cmd):
     child.sendline(cmd)
     child.expect(r"\(gdb\)\s*$")
 
-def parse_word(output):
-    # extract the first hex word after the address:
-    #   0xADDR:    0xVAL  ...
-    m = re.search(r":\s*(0x[0-9A-Fa-f]+)", output)
+def gget(child, cmd):
+    child.sendline(cmd)
+    child.expect(r"\(gdb\)\s*$")
+    return child.before.decode()
+
+def read_word(child, addr):
+    out = gget(child, f"x/wx {addr:#x}")
+    m = re.search(r":\s*(0x[0-9A-Fa-f]+)", out)
     if not m:
-        raise ValueError("Can't parse word from:\n" + output)
+        raise RuntimeError(f"x/wx parse failed:\n{out}")
     return int(m.group(1), 16)
 
-def parse_4words(output):
-    # extract the four hex values on the line after the address
-    lines = output.splitlines()
-    if len(lines) < 2:
-        raise ValueError("Unexpected mdw output:\n" + output)
-    toks = lines[1].split()
-    # drop leading "0xADDR:" if present
-    if toks[0].endswith(":"):
-        toks = toks[1:]
-    if len(toks) < 4:
-        raise ValueError("Need 4 words, got " + str(toks))
-    return [int(t, 16) for t in toks[:4]]
+def read_n_words(child, addr, n):
+    out = gget(child, f"x/{n}xw {addr:#x}")
+    # Esempio: "0xADDR: 0xW0 0xW1 0xW2 ..."
+    toks = re.findall(r"0x[0-9A-Fa-f]{1,8}", out)
+    # il primo è l'indirizzo, poi n parole
+    words = [int(t,16) for t in toks[-n:]]
+    if len(words) != n:
+        raise RuntimeError(f"x/{n}xw parse failed:\n{out}")
+    return words
 
-def combine(regs):
-    return (regs[0] << 96) | (regs[1] << 64) | (regs[2] << 32) | regs[3]
+def write_word(child, addr, val):
+    gsend(child, f"set *(unsigned int*){addr:#x} = {val:#x}")
 
-def print_fields(v):
-    src =    (v >> 124) & 0xF
-    req_ts = (v >> 92)  & 0xFFFFFFFF
-    resp_ts=(v >> 76)  & 0xFFFF
-    addr =   (v >> 44)  & 0xFFFFFFFF
-    data =   (v >> 12)  & 0xFFFFFFFF
-    be =     (v >> 8)   & 0xF
-    we =     (v >> 7)   & 1
-    valid =  (v >> 6)   & 1
-    gnt =    (v >> 5)   & 1
-    res =    v & 0x1F
-    names = {
-        1:"CORE_INSTR",2:"CORE_DATA",3:"AO_PERIPH",4:"PERIPH",
-        5:"RAM0",6:"RAM1",7:"FLASH",8:"DMA_READ",9:"DMA_WRITE",10:"DMA_ADDR"
-    }
-    print(f"""
-source_id:      {names.get(src,f'UNKNOWN({src})')}
-req_timestamp:  0x{req_ts:08X}
-resp_timestamp: 0x{resp_ts:04X}
-address:        0x{addr:08X}
-data:           0x{data:08X}
-byte_enable:    0x{be:X}
-we:             {we}
-valid:          {valid}
-gnt:            {gnt}
-reserved:       0x{res:X}
-""")
+# ------------------------ Frame decode ------------------------
+
+# DATA0..3 mapping: DATA0=MSW, DATA3=LSW (come nel tuo RTL)
+def combine128(ws):
+    # ws[0]=DATA0 (MSW) ... ws[3]=DATA3 (LSW)
+    return (ws[0] << 96) | (ws[1] << 64) | (ws[2] << 32) | ws[3]
+
+# Bitfield aderente alla tua typedef da 128b
+def decode_frame(v):
+    src     = (v >> 124) & 0xF
+    req_ts  = (v >> 92)  & 0xFFFFFFFF
+    resp_ts = (v >> 76)  & 0xFFFF
+    addr    = (v >> 44)  & 0xFFFFFFFF
+    data    = (v >> 12)  & 0xFFFFFFFF
+    be      = (v >> 8)   & 0xF
+    we      = (v >> 7)   & 0x1
+    valid   = (v >> 6)   & 0x1
+    gnt     = (v >> 5)   & 0x1
+    return src, req_ts, resp_ts, addr, data, be, we, valid, gnt
+
+NAMES = {
+    0x1:"CORE_INSTR", 0x2:"CORE_DATA", 0x3:"AO_PERIPH", 0x4:"PERIPH",
+    0x5:"RAM0", 0x6:"RAM1", 0x7:"FLASH",
+    0x8:"DMA_READ", 0x9:"DMA_WRITE", 0xA:"DMA_ADDR",
+}
+
+def dump_frame(v, raw_words=None, status=None):
+    src, req_ts, resp_ts, addr, data, be, we, valid, gnt = decode_frame(v)
+    src_name = NAMES.get(src, f"{src}")
+    if status is not None:
+        empty = 1 if (status & EMPTY_BIT) else 0
+        full  = 1 if (status & FULL_BIT) else 0
+        fav   = 1 if (status & FRAME_AVAIL_BIT) else 0
+        print(f"STATUS: empty={empty} full={full} frame_avail={fav}")
+    print("── FRAME ─────────────────────────────")
+    print(f"  source    : {src_name}")
+    print(f"  req_ts    : 0x{req_ts:08X}")
+    print(f"  resp_ts   : 0x{resp_ts:04X}")
+    print(f"  address   : 0x{addr:08X}")
+    print(f"  data      : 0x{data:08X}")
+    print(f"  byte_en   : 0x{be:X}")
+    print(f"  we        : {we}")
+    print(f"  valid     : {valid}")
+    print(f"  gnt       : {gnt}")
+    if raw_words:
+        print("  raw w[DATA0..3]: " + ", ".join(f"0x{x:08X}" for x in raw_words))
+    print("───────────────────────────────────────")
+
+# ------------------------ Actions ------------------------
+
+def ack_frame(child):
+    # Scrivi sempre EN | FRAME_READ (0x1 | 0x4 = 0x5)
+    write_word(child, CTRL_ADDR, EN_BIT | FRAME_READ_BIT)
+
+def reset_fifo(child):
+    # RST=1 (tiene reset), poi EN=1 (reset rilasciato)
+    write_word(child, CTRL_ADDR, RST_FIFO_BIT)
+    write_word(child, CTRL_ADDR, EN_BIT)
+
+# ------------------------ Main ------------------------
 
 def main():
-    # launch GDB
-    gdb_cmd = "/home/riccardo/tools/riscv/bin/riscv32-unknown-elf-gdb --nx --quiet /home/riccardo/git/hep/x-heep/sw/build/main.elf"
-    child = pexpect.spawn(gdb_cmd, timeout=2000)
-    
-    # Wait for the initial prompt. Use a regex that allows for trailing whitespace.
-    try:
-        child.expect(r"\(gdb\)\s*$")
-    except pexpect.TIMEOUT:
-        print("Timeout waiting for initial GDB prompt")
-        sys.exit(1)
-    
+    elf = "/home/riccardo/git/hep/x-heep/sw/build/main.elf"
+    gdb = "/home/riccardo/tools/riscv/bin/riscv32-unknown-elf-gdb"
+
+    child = pexpect.spawn(f"{gdb} --nx --quiet {elf}", timeout=300)
+    child.expect(r"\(gdb\)\s*$")
     print("GDB prompt received.")
 
+    # Init GDB come richiesto
+    for cmd in [
+        "set target-async on",
+        "set pagination off",
+        "set confirm off",
+        "set remotetimeout 2000",
+        "target remote localhost:3333",
+        "load",
+        "c",
+    ]:
+        gsend(child, cmd)
 
-    send_cmd(child, "set pagination off")
-    send_cmd(child, "set target-async on")
-    send_cmd(child, "set confirm off")
-    send_cmd(child, "set remotetimeout 5000")
+    print(">>> Starting program and entering pump loop")
 
-    # Now connect to the target.
-    send_cmd(child, "target remote localhost:3333")
-    print("Connected to target via GDB.")
-
-    # Load program.
-    send_cmd(child, "load")
-    print("Loaded")
-
-    send_cmd(child, "break main")
-    send_cmd(child, "c")
-
-
-    print(">>> hit hardware‐halt, now pumping frames…")
-
-    # loop until FIFO empty
     while True:
-        # read status
-       # 1) ask OpenOCD to read our status reg off the system bus:
-        send_cmd(child, f"monitor mdw {STATUS_ADDR:#x} 1")
-        status = parse_word(child.before.decode())
-        # send_cmd(child, f"x/xw {STATUS_ADDR:#x}")
-        # status = parse_word(child.before.decode())
-        if status & FRAME_AVAIL_BIT == 0:
-            # no frame available → done
-            print(">>> FIFO empty, resuming execution.")
+        # Aspetta un HALT (SIGTRAP / breakpoint)
+        i = child.expect([r"\(gdb\)\s*$", r"Program exited", pexpect.EOF])
+        if i != 0:
+            print(">>> Program ended, exiting.")
             break
 
-        # read the 128‐bit frame
-        send_cmd(child, f"x/4xw {DATA_ADDR:#x}")
-        regs = parse_4words(child.before.decode())
-        val  = combine(regs)
-        print(f">>> frame = 0x{val:032X}")
-        print_fields(val)
+        print(">>> HALT detected")
 
-        # tell sniffer “I read it”
-        send_cmd(child, f"set *(unsigned int*){CTRL_ADDR:#x} = {FRAME_READ_BIT}")
+        # Primo sguardo allo status (opzionale, solo diagnostica)
+        st0 = read_word(child, STATUS_ADDR)
+        empty0 = bool(st0 & EMPTY_BIT)
+        full0  = bool(st0 & FULL_BIT)
+        fav0   = bool(st0 & FRAME_AVAIL_BIT)
+        print(f">>> STATUS@halt: empty={int(empty0)} full={int(full0)} frame_avail={int(fav0)}")
 
-        # resume until next halt (i.e. until FIFO full again or we force empty)
-        send_cmd(child, "c")
+        # LOOP DI DRAIN:
+        # ogni iterazione:
+        #   1) ack (EN|FRAME_READ)
+        #   2) x/5xw STATUS_ADDR -> [STATUS, DATA0,DATA1,DATA2,DATA3]
+        #   3) dump frame
+        #   4) se STATUS.empty=1 → break
+        while True:
+            ack_frame(child)
+            words5 = read_n_words(child, STATUS_ADDR, 5)
+            status = words5[0]
+            data4  = words5[1:]
 
-    # finally resume normal execution
-    send_cmd(child, "c")
+            v128 = combine128(data4)
+            dump_frame(v128, raw_words=data4, status=status)
+
+            if status & EMPTY_BIT:
+                print(">>> STATUS: EMPTY → stop draining.")
+                break
+
+        # Reset FIFO come da sequenza richiesta (2 → 1)
+        print(">>> Reset FIFO (2 → 1)")
+        reset_fifo(child)
+
+        # Continua l'esecuzione: torneremo qui al prossimo SIGTRAP
+        child.sendline("c")
+
+    # Chiudi GDB
     child.sendline("quit")
     child.expect(pexpect.EOF)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except pexpect.TIMEOUT:
+        print("TIMEOUT: se succede su letture x/.. verifica che la CPU non sia gated in HALT.")
+        sys.exit(1)
+    except Exception as e:
+        print("ERROR:", e)
+        sys.exit(2)

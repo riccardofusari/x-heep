@@ -25,27 +25,44 @@ module bus_sniffer
 
 
   // Memory mapped registers interface signals
+    /* verilator lint_off UNUSED */
+  bus_sniffer_reg2hw_t reg2hw;
+  bus_sniffer_hw2reg_t hw2reg;
+
 
   logic [31:0] sni_data0;
   logic [31:0] sni_data1;
   logic [31:0] sni_data2;
   logic [31:0] sni_data3;
 
-  /* verilator lint_off UNUSED */
-  bus_sniffer_reg2hw_t reg2hw;
-  bus_sniffer_hw2reg_t hw2reg;
   logic rst_fifo_reg;
   logic rst_fifo_reg_ff;
   logic rst_fifo;
-  logic frame_read_sw;
-  logic enable_gating_reg;
 
+  logic frame_read_q_d;           // 1-cycle delayed copy of .q
+  wire  frame_read_rise;          // rising-edge detect of SW write
+  logic frame_pending;            // stays high until next SW ack
+  // logic frame_read_sw;
+  // logic frame_read_sw_q;
+  // logic frame_read_ack;
+
+  logic enable_gating_reg;
+  logic capture_en = ~debug_mode_i;  // cattura solo fuori dal debug
+
+  // Status + data -> HW drives them continuously
   assign hw2reg.sni_status.empty.de       = 1'b1;
   assign hw2reg.sni_status.full.de        = 1'b1;
   assign hw2reg.sni_status.frame_avail.de = 1'b1;
   assign hw2reg.sni_status.empty.d        = empty;
   assign hw2reg.sni_status.full.d         = full;
-  assign hw2reg.sni_status.frame_avail.d  = pop_fifo;
+  // CHANGED: drive sticky 'frame_pending', not a 1-cycle pulse
+  // assign hw2reg.sni_status.frame_avail.d  = pop_fifo;
+  assign hw2reg.sni_status.frame_avail.d  = frame_pending;
+
+  // auto-clear pulse for FRAME_READ (drive hw2reg only via continuous assigns)
+  logic frame_read_autoclr_pulse;
+  assign hw2reg.sni_ctrl.frame_read.de = frame_read_autoclr_pulse; // 1-cycle when we want to clear
+  assign hw2reg.sni_ctrl.frame_read.d  = 1'b0;                     // clear value
 
   assign hw2reg.sni_data0.de              = 1'b1;
   assign hw2reg.sni_data1.de              = 1'b1;
@@ -56,11 +73,50 @@ module bus_sniffer
   assign hw2reg.sni_data2.d               = sni_data2;
   assign hw2reg.sni_data3.d               = sni_data3;
 
+  // CHANGED: no continuous assign to frame_read.de here anymore
+  // (drive it procedurally when we need to auto-clear)
+  // assign hw2reg.sni_ctrl.frame_read.de    = frame_read_ack;
+  // assign frame_read_sw                    = reg2hw.sni_ctrl.frame_read;
+  // assign frame_read_sw_q                  = reg2hw.sni_ctrl.frame_read.q;
+
+
   assign rst_fifo_reg                     = reg2hw.sni_ctrl.rst_fifo;
-  assign frame_read_sw                    = reg2hw.sni_ctrl.frame_read;
   assign enable_gating_reg                = reg2hw.sni_ctrl.enable_gating;
 
+  // SW ack rising-edge detection
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      frame_read_q_d <= 1'b0;
+    end else begin
+      frame_read_q_d <= reg2hw.sni_ctrl.frame_read.q;
+    end
+  end
+  assign frame_read_rise = reg2hw.sni_ctrl.frame_read.q & ~frame_read_q_d;
 
+
+  // // Auto-clear del campo SNI_CTRL.FRAME_READ
+  // assign hw2reg.sni_ctrl.frame_read.de = frame_read_sw_rise;
+  // assign hw2reg.sni_ctrl.frame_read.d  = 1'b0;
+
+  // sticky "frame_available" flag
+  // always_ff @(posedge clk_i or negedge rst_ni) begin
+  //   if (!rst_ni) begin
+  //     frame_pending <= 1'b0;
+  //   end else begin
+  //     // set when we pop a frame
+  //     if (pop_fifo) frame_pending <= 1'b1;
+  //     // clear when SW acks (rising edge of FRAME_READ)
+  //     if (frame_read_rise) frame_pending <= 1'b0;
+  //   end
+  // end
+
+  // sticky "frame_available" flag
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)                    frame_pending <= 1'b0;
+    else if (rst_fifo)              frame_pending <= 1'b0;       // pulisci anche al reset FIFO
+    else if (pop_fifo)              frame_pending <= 1'b1;       // nuovo frame esposto a sni_data*
+    else if (frame_read_rise)    frame_pending <= 1'b0;       // SW ha letto/ackato
+  end
   //--------------------------------------------------------------------------
   // timestamp; only use the lower 16 bits
   //--------------------------------------------------------------------------
@@ -464,8 +520,8 @@ module bus_sniffer
       // By default, no push this cycle
       push_fifo <= 1'b0;
 
-      // If we found a complete entry AND FIFO not full, push it
-      if (push_idx != -1 && !full  /*&& !halt_stat*/) begin
+      // If we found a complete entry AND FIFO not full AND not in debug, push it
+      if (push_idx != -1 && !full  && capture_en) begin
         push_fifo    <= 1'b1;  // 1-cycle pulse
         fifo_data_in <= transaction_table[push_idx].frame;
         // Mark that entry as free
@@ -492,27 +548,46 @@ module bus_sniffer
   end
 
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      pop_fifo <= 1'b0;
-    end else begin
-      pop_fifo <= 1'b0;  // default: no pop
+  // always_ff @(posedge clk_i or negedge rst_ni) begin
+  //   if (!rst_ni) begin
+  //     pop_fifo <= 1'b0;
+  //   end else begin
+  //     pop_fifo <= 1'b0;  // default: no pop
 
-      // 1) FIFO just became full → generate first pop
-      // if (/*halt_pulse*/!run_enable) begin
-      //   pop_fifo <= 1'b1;
+  //     // 1) FIFO just became full → generate first pop
+  //     // if (/*halt_pulse*/!run_enable) begin
+  //     //   pop_fifo <= 1'b1;
 
-      if (  /*halt_pulse*/ initial_pop  /**/) begin
-        pop_fifo <= 1'b1;
+  //     if (  /*halt_pulse*/ initial_pop  /**/) begin
+  //       pop_fifo <= 1'b1;
 
-        // 2) SW read-ack while frames remain
-      end else if (frame_read_sw && !empty) begin
-        pop_fifo <= 1'b1;
-      end
+  //       // 2) SW read-ack while frames remain
+  //     end else if (frame_read_sw && !empty) begin
+  //       pop_fifo <= 1'b1;
+  //     end
+  //   end
+  // end
+
+
+always_ff @(posedge clk_i or negedge rst_ni) begin
+  if (!rst_ni) begin
+    pop_fifo                 <= 1'b0;
+    frame_read_autoclr_pulse <= 1'b0;
+  end else begin
+    pop_fifo                 <= 1'b0;  // default
+    frame_read_autoclr_pulse <= 1'b0;  // default
+
+    // first pop when clock gets gated
+    if (initial_pop && !empty) begin
+      pop_fifo <= 1'b1;
+
+    // SW ack rising edge -> pop exactly one and auto-clear FRAME_READ
+    end else if (frame_read_rise && !empty) begin
+      pop_fifo                 <= 1'b1;
+      frame_read_autoclr_pulse <= 1'b1; // drives hw2reg via continuous assign
     end
   end
-
-
+end
 
   // ---------------------------------------------------------------------------
   // FIFO-full edge detector
@@ -609,64 +684,13 @@ module bus_sniffer
   assign clk_gate_o = run_enable;
 
 
-
-
-  // ————————————————————————————————————————————————————————————————
-  // simple “self–drive” for frame_read in pure sim:
-  // whenever we pop, reload frame_read_delay_cnt to 2;
-  // counts down every cycle; when it hits 1 we assert a dummy
-  // read–ack pulse so we pop the next frame automatically.
-  //———————————————————————————————————————————————————————————————
-  // logic [1:0] frame_read_delay_cnt;
-  // always_ff @(posedge clk_i or negedge rst_ni) begin
-  //   if (!rst_ni) begin
-  //     frame_read_delay_cnt <= 2'd0;
-  //   end else if (pop_fifo) begin
-  //     // we just popped a frame — start a 2‑cycle countdown
-  //     frame_read_delay_cnt <= 2'd2;
-  //   end else if (frame_read_delay_cnt != 0) begin
-  //     frame_read_delay_cnt <= frame_read_delay_cnt - 2'd1;
-  //   end
-  // end
-
-
-  // // combine real SW-driven flag with our sim‑only pulse:
-  // wire frame_read_ack = frame_read_sw || (frame_read_delay_cnt == 2'd1);
-  // // internal state
-  // logic halt_state;
-
-  // always_ff @(posedge clk_i or negedge rst_ni) begin
-  //   if (!rst_ni) begin
-  //     halt_state <= 1'b0;
-  //     pop_fifo   <= 1'b0;
-  //   end else begin
-  //     // default: no pop this cycle
-  //     pop_fifo <= 1'b0;
-
-  //     // 1) FIFO just hit full?
-  //     if (full && !halt_state) begin
-  //       // enter halt state, pop the first stored frame
-  //       halt_state <= 1'b1;
-  //       pop_fifo   <= 1'b1;
-
-  //       // 2) already halted and SW told us it read the last frame?
-  //     end else if (halt_state && frame_read_sw && !empty) begin
-  //       // pop the next frame
-  //       pop_fifo <= 1'b1;
-  //     end
-
-  //     // 3) once FIFO completely drains, clear halt_state
-  //     if (empty) begin
-  //       halt_state <= 1'b0;
-  //     end
-  //   end
-  // end
-
-  // assign halt_state_o = halt_state;
-
-
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
+      sni_data0 <= 32'd0;
+      sni_data1 <= 32'd0;
+      sni_data2 <= 32'd0;
+      sni_data3 <= 32'd0;
+    end else if (rst_fifo) begin
       sni_data0 <= 32'd0;
       sni_data1 <= 32'd0;
       sni_data2 <= 32'd0;
