@@ -1,3 +1,18 @@
+// === Enable & DPI import ===
+parameter bit DPI_ENABLE = 1'b1;     // metti 0 per disabilitare rapidamente
+parameter int DPI_STREAM_ID = 0;
+
+import "DPI-C" function int sniffer_dpi_push
+(
+  input int stream_id,
+  input int nwords,                  // 4 fisse per il tuo frame
+  input int unsigned w0,             // DATA0 = MSW
+  input int unsigned w1,
+  input int unsigned w2,
+  input int unsigned w3
+);
+
+
 module bus_sniffer
   import bus_sniffer_pkg::*;
   import bus_sniffer_reg_pkg::*;
@@ -530,61 +545,42 @@ module bus_sniffer
     end
   end
 
-
-  // ---------------------------------------------------------------------------
-  // FIFO pop logic
-  // ---------------------------------------------------------------------------
-
-  // Sample the negedge of the run_enable of the clock gating, to do the first pop
-  logic run_enable_q;
-  wire initial_pop = run_enable_q & ~run_enable;
-
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      run_enable_q <= 1'b1;
-    end else begin
-      run_enable_q <= run_enable;  // sample last cycle’s run_enable
-    end
-  end
-
-
-  // always_ff @(posedge clk_i or negedge rst_ni) begin
-  //   if (!rst_ni) begin
-  //     pop_fifo <= 1'b0;
-  //   end else begin
-  //     pop_fifo <= 1'b0;  // default: no pop
-
-  //     // 1) FIFO just became full → generate first pop
-  //     // if (/*halt_pulse*/!run_enable) begin
-  //     //   pop_fifo <= 1'b1;
-
-  //     if (  /*halt_pulse*/ initial_pop  /**/) begin
-  //       pop_fifo <= 1'b1;
-
-  //       // 2) SW read-ack while frames remain
-  //     end else if (frame_read_sw && !empty) begin
-  //       pop_fifo <= 1'b1;
-  //     end
-  //   end
-  // end
-
-
+// ---------------------------------------------------------------------------
+// FIFO pop logic w/ DPI drain:
+//   priority
+//     1) DPI drain 
+//     2) initial_pop (if clock gating)
+//     3) ack SW (FRAME_READ rising)
+// ---------------------------------------------------------------------------
 always_ff @(posedge clk_i or negedge rst_ni) begin
   if (!rst_ni) begin
     pop_fifo                 <= 1'b0;
     frame_read_autoclr_pulse <= 1'b0;
   end else begin
-    pop_fifo                 <= 1'b0;  // default
-    frame_read_autoclr_pulse <= 1'b0;  // default
+    pop_fifo                 <= 1'b0;
+    frame_read_autoclr_pulse <= 1'b0;
 
-    // first pop when clock gets gated
-    if (initial_pop && !empty) begin
+    // (1) Drain DPI: push to consumer C, then pop if pushed succesfully
+    if (DPI_ENABLE && !debug_mode_i && !empty) begin
+      int pushed;
+      pushed = sniffer_dpi_push(
+        DPI_STREAM_ID, 4,
+        fifo_data_out[127:96], // MSW  (== sni_data0)
+        fifo_data_out[95:64],
+        fifo_data_out[63:32],
+        fifo_data_out[31:0]    // LSW  (== sni_data3)
+      );
+      if (pushed) begin
+        pop_fifo <= 1'b1;  // consuma l'elemento che abbiamo appena inviato
+      end
+
+    end else if (initial_pop && !empty) begin
       pop_fifo <= 1'b1;
 
-    // SW ack rising edge -> pop exactly one and auto-clear FRAME_READ
+    // ack SW: single pop and autoclear bit (GDB/CSR compatibility)
     end else if (frame_read_rise && !empty) begin
       pop_fifo                 <= 1'b1;
-      frame_read_autoclr_pulse <= 1'b1; // drives hw2reg via continuous assign
+      frame_read_autoclr_pulse <= 1'b1;
     end
   end
 end
