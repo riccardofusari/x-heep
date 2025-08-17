@@ -44,7 +44,6 @@ module bus_sniffer
   bus_sniffer_reg2hw_t reg2hw;
   bus_sniffer_hw2reg_t hw2reg;
 
-
   logic [31:0] sni_data0;
   logic [31:0] sni_data1;
   logic [31:0] sni_data2;
@@ -57,12 +56,10 @@ module bus_sniffer
   logic frame_read_q_d;           // 1-cycle delayed copy of .q
   wire  frame_read_rise;          // rising-edge detect of SW write
   logic frame_pending;            // stays high until next SW ack
-  // logic frame_read_sw;
-  // logic frame_read_sw_q;
-  // logic frame_read_ack;
 
   logic enable_gating_reg;
-  logic capture_en = ~debug_mode_i;  // cattura solo fuori dal debug
+  wire capture_en;
+  assign capture_en = ~debug_mode_i;  // cattura solo fuori dal debug
 
   // Status + data -> HW drives them continuously
   assign hw2reg.sni_status.empty.de       = 1'b1;
@@ -109,28 +106,11 @@ module bus_sniffer
   assign frame_read_rise = reg2hw.sni_ctrl.frame_read.q & ~frame_read_q_d;
 
 
-  // // Auto-clear del campo SNI_CTRL.FRAME_READ
-  // assign hw2reg.sni_ctrl.frame_read.de = frame_read_sw_rise;
-  // assign hw2reg.sni_ctrl.frame_read.d  = 1'b0;
-
-  // sticky "frame_available" flag
-  // always_ff @(posedge clk_i or negedge rst_ni) begin
-  //   if (!rst_ni) begin
-  //     frame_pending <= 1'b0;
-  //   end else begin
-  //     // set when we pop a frame
-  //     if (pop_fifo) frame_pending <= 1'b1;
-  //     // clear when SW acks (rising edge of FRAME_READ)
-  //     if (frame_read_rise) frame_pending <= 1'b0;
-  //   end
-  // end
-
-  // sticky "frame_available" flag
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)                    frame_pending <= 1'b0;
-    else if (rst_fifo)              frame_pending <= 1'b0;       // pulisci anche al reset FIFO
-    else if (pop_fifo)              frame_pending <= 1'b1;       // nuovo frame esposto a sni_data*
-    else if (frame_read_rise)    frame_pending <= 1'b0;       // SW ha letto/ackato
+    else if (rst_fifo)              frame_pending <= 1'b0;
+    else if (pop_fifo && !DPI_ENABLE) frame_pending <= 1'b1; // <— non settare in DPI
+    else if (frame_read_rise)       frame_pending <= 1'b0;
   end
   //--------------------------------------------------------------------------
   // timestamp; only use the lower 16 bits
@@ -156,6 +136,7 @@ module bus_sniffer
   //This prevent the fifo to fill during debug mode, that will prevent the sigtrap to happen.
 
   always_ff @(posedge rst_fifo_reg or negedge debug_mode_i) begin
+    /* verilator lint_off SYNCASYNCNET */
     if (rst_fifo_reg && debug_mode_i) rst_fifo_reg_ff <= rst_fifo_reg;
     else if (!debug_mode_i) rst_fifo_reg_ff <= 0;
 
@@ -552,6 +533,41 @@ module bus_sniffer
 //     2) initial_pop (if clock gating)
 //     3) ack SW (FRAME_READ rising)
 // ---------------------------------------------------------------------------
+
+  // Sample the negedge of the run_enable of the clock gating, to do the first pop
+  logic run_enable_q;
+  wire initial_pop = run_enable_q & ~run_enable;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      run_enable_q <= 1'b1;
+    end else begin
+      run_enable_q <= run_enable;  // sample last cycle’s run_enable
+    end
+  end
+
+
+  // always_ff @(posedge clk_i or negedge rst_ni) begin
+  //   if (!rst_ni) begin
+  //     pop_fifo <= 1'b0;
+  //   end else begin
+  //     pop_fifo <= 1'b0;  // default: no pop
+
+  //     // 1) FIFO just became full → generate first pop
+  //     // if (/*halt_pulse*/!run_enable) begin
+  //     //   pop_fifo <= 1'b1;
+
+  //     if (  /*halt_pulse*/ initial_pop  /**/) begin
+  //       pop_fifo <= 1'b1;
+
+  //       // 2) SW read-ack while frames remain
+  //     end else if (frame_read_sw && !empty) begin
+  //       pop_fifo <= 1'b1;
+  //     end
+  //   end
+  // end
+
+
 always_ff @(posedge clk_i or negedge rst_ni) begin
   if (!rst_ni) begin
     pop_fifo                 <= 1'b0;
@@ -561,7 +577,8 @@ always_ff @(posedge clk_i or negedge rst_ni) begin
     frame_read_autoclr_pulse <= 1'b0;
 
     // (1) Drain DPI: push to consumer C, then pop if pushed succesfully
-    if (DPI_ENABLE && !debug_mode_i && !empty) begin
+    /* verilator lint_off SYNCASYNCNET */
+    if (DPI_ENABLE /*&& !debug_mode_i*/ && !empty) begin
       int pushed;
       pushed = sniffer_dpi_push(
         DPI_STREAM_ID, 4,
@@ -570,6 +587,7 @@ always_ff @(posedge clk_i or negedge rst_ni) begin
         fifo_data_out[63:32],
         fifo_data_out[31:0]    // LSW  (== sni_data3)
       );
+      /* verilator lint_off WIDTH */
       if (pushed) begin
         pop_fifo <= 1'b1;  // consuma l'elemento che abbiamo appena inviato
       end
@@ -577,7 +595,7 @@ always_ff @(posedge clk_i or negedge rst_ni) begin
     end else if (initial_pop && !empty) begin
       pop_fifo <= 1'b1;
 
-    // ack SW: single pop and autoclear bit (GDB/CSR compatibility)
+    // SW ack rising edge -> pop exactly one and auto-clear FRAME_READ
     end else if (frame_read_rise && !empty) begin
       pop_fifo                 <= 1'b1;
       frame_read_autoclr_pulse <= 1'b1;

@@ -159,6 +159,7 @@ filesets:
     - tb/XHEEP_CmdLineOptions.hh: { is_include_file: true }
     - tb/XHEEP_CmdLineOptions.cpp
     - tb/tb_top.cpp
+    - hw/ip/bus_sniffer/dpi/bus_sniffer_dpi.cc 
     file_type: cppSource
 
   tb-sv:
