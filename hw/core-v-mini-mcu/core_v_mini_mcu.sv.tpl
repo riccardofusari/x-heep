@@ -318,7 +318,7 @@ ${pad.core_v_mini_mcu_interface}
     rv_timer_intr[1]
   };
 
-  logic debug_mode; //mohammedk: should take this signal into account when filling the fifo
+  logic debug_mode;
 
   cpu_subsystem #(
       .BOOT_ADDR(BOOT_ADDR),
