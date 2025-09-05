@@ -1,0 +1,4328 @@
+diff --git a/core-v-mini-mcu.core b/core-v-mini-mcu.core
+index e07824b..94f9427 100644
+--- a/core-v-mini-mcu.core
++++ b/core-v-mini-mcu.core
+@@ -36,6 +36,7 @@ filesets:
+     - x-heep:ip:fast_intr_ctrl
+     - x-heep:ip:obi_fifo
+     - x-heep:ip:pdm2pcm
++    - x-heep:ip:bus_sniffer
+     files:
+     - hw/core-v-mini-mcu/core_v_mini_mcu.sv
+     - hw/core-v-mini-mcu/cpu_subsystem.sv
+@@ -158,6 +159,7 @@ filesets:
+     - tb/XHEEP_CmdLineOptions.hh: { is_include_file: true }
+     - tb/XHEEP_CmdLineOptions.cpp
+     - tb/tb_top.cpp
++    - hw/ip/bus_sniffer/dpi/bus_sniffer_dpi.cc 
+     file_type: cppSource
+ 
+   tb-sv:
+diff --git a/hw/core-v-mini-mcu/core_v_mini_mcu.sv b/hw/core-v-mini-mcu/core_v_mini_mcu.sv
+index bb82296..7ccd130 100644
+--- a/hw/core-v-mini-mcu/core_v_mini_mcu.sv
++++ b/hw/core-v-mini-mcu/core_v_mini_mcu.sv
+@@ -342,6 +342,8 @@ module core_v_mini_mcu
+   import core_v_mini_mcu_pkg::*;
+   import cv32e40p_apu_core_pkg::*;
+   import power_manager_pkg::*;
++  import bus_sniffer_pkg::*;  // Import the bus_sniff_bundle_t
++
+ 
+   localparam NUM_BYTES = core_v_mini_mcu_pkg::MEM_SIZE;
+   localparam DM_HALTADDRESS = core_v_mini_mcu_pkg::DEBUG_START_ADDRESS + 32'h00000800; //debug rom code (section .text in linker) starts at 0x800
+@@ -435,6 +437,54 @@ module core_v_mini_mcu
+   logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] memory_subsystem_banks_powergate_iso_n;
+   logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] memory_subsystem_clkgate_en_n;
+ 
++  /* Clock stepping module*/
++  //logic         dbg_en_gated_clk;
++  //logic [31:0]  dbg_clk_cycles;
++  //logic         dbg_stepping_trigger;
++  //logic         dbg_gated_clk;
++  //logic         dbg_clk_running;
++  //logic [31:0]  dbg_cycles_left;
++
++
++  // Create the bus sniffing bundle
++  bus_sniffer_bundle_t bus_sniffer_bundle;
++
++  // Assign signals to the bus_sniff_bundle
++  always_comb begin
++    // Core-related signals
++    bus_sniffer_bundle.core_instr_req           = core_instr_req;
++    bus_sniffer_bundle.core_instr_resp          = core_instr_resp;
++    bus_sniffer_bundle.core_data_req            = core_data_req;
++    bus_sniffer_bundle.core_data_resp           = core_data_resp;
++
++    // DMA-related signals
++    bus_sniffer_bundle.dma_read_req             = dma_read_req;
++    bus_sniffer_bundle.dma_read_resp            = dma_read_resp;
++    bus_sniffer_bundle.dma_write_req            = dma_write_req;
++    bus_sniffer_bundle.dma_write_resp           = dma_write_resp;
++    bus_sniffer_bundle.dma_addr_req             = dma_addr_req;
++    bus_sniffer_bundle.dma_addr_resp            = dma_addr_resp;
++
++    // Peripherals signals
++    bus_sniffer_bundle.ao_peripheral_slave_req  = ao_peripheral_slave_req;
++    bus_sniffer_bundle.ao_peripheral_slave_resp = ao_peripheral_slave_resp;
++    bus_sniffer_bundle.peripheral_slave_req     = peripheral_slave_req;
++    bus_sniffer_bundle.peripheral_slave_resp    = peripheral_slave_resp;
++
++    // RAM signals
++    bus_sniffer_bundle.ram_slave_req            = ram_slave_req;
++    bus_sniffer_bundle.ram_slave_resp           = ram_slave_resp;
++
++    // Memory Map SPI Region
++    bus_sniffer_bundle.flash_mem_slave_req      = flash_mem_slave_req;
++    bus_sniffer_bundle.flash_mem_slave_resp     = flash_mem_slave_resp;
++  end
++
++  // Halt when bus_sniffer is full
++  logic bus_sniffer_full;
++  logic bus_sniffer_clk_gate_o;
++  logic [NRHARTS-1:0] dm_req_or;
++
+   //pwrgate exposed outside for UPF sim flow and switch cells
+   assign cpu_subsystem_powergate_switch_no = cpu_subsystem_pwr_ctrl_out.pwrgate_en_n;
+   assign cpu_subsystem_pwr_ctrl_in.pwrgate_ack_n = cpu_subsystem_powergate_switch_ack_ni;
+@@ -518,6 +568,8 @@ module core_v_mini_mcu
+     rv_timer_intr[1]
+   };
+ 
++  logic debug_mode;  //mohammedk: should take this signal into account when filling the fifo
++
+   cpu_subsystem #(
+       .BOOT_ADDR(BOOT_ADDR),
+       .COREV_PULP(COREV_PULP),
+@@ -544,9 +596,21 @@ module core_v_mini_mcu
+       .irq_ack_o(irq_ack),
+       .irq_id_o(irq_id_out),
+       .debug_req_i(debug_core_req),
++      .debug_mode_o(debug_mode),
+       .core_sleep_o(core_sleep)
+   );
+ 
++  //clk_stepping_dbg clk_stepping_dbg_i (
++  //    .clk_i(clk_i),
++  //    .rst_ni(rst_ni),
++  //    .en_i(dbg_en_gated_clk),
++  //    .cycles_i(dbg_clk_cycles),
++  //    .cycle_start_i(dbg_stepping_trigger),
++  //    .clk_o(dbg_gated_clk),
++  //    .running_o(dbg_clk_running),
++  //    .cycles_left_o(dbg_cycles_left)
++  //);
++
+   debug_subsystem #(
+       .NRHARTS    (NRHARTS),
+       .JTAG_IDCODE(JTAG_IDCODE)
+@@ -758,18 +822,25 @@ module core_v_mini_mcu
+       .i2s_sd_o(i2s_sd_o),
+       .i2s_sd_oe_o(i2s_sd_oe_o),
+       .i2s_sd_i(i2s_sd_i),
+-      .i2s_rx_valid_o(i2s_rx_valid)
++      .i2s_rx_valid_o(i2s_rx_valid),
++      .bus_sniffer_bundle_i(bus_sniffer_bundle),
++      .bus_sniffer_clk_gate_o(bus_sniffer_clk_gate_o),
++      .debug_mode_i(debug_mode),
++      .bus_sniffer_full(bus_sniffer_full)
+   );
+ 
++  //Bus sniffer halt
++  assign dm_req_or = debug_req | {NRHARTS{bus_sniffer_full}};
++
+   // Debug_req assign
+   if (NRHARTS == 1) begin
+-    assign debug_core_req  = debug_req;
++    assign debug_core_req  = dm_req_or;
+     assign ext_debug_req_o = 1'b0;
+   end else begin
+     always @(*) begin
+       for (int i = 0; i < NRHARTS; i++) begin
+-        if (i == 0) debug_core_req = debug_req[i];
+-        else ext_debug_req_o[i-1] = debug_req[i];
++        if (i == 0) debug_core_req = dm_req_or[i];
++        else ext_debug_req_o[i-1] = dm_req_or[i];
+       end
+     end
+   end
+diff --git a/hw/core-v-mini-mcu/core_v_mini_mcu.sv.tpl b/hw/core-v-mini-mcu/core_v_mini_mcu.sv.tpl
+index aaca628..de552fd 100644
+--- a/hw/core-v-mini-mcu/core_v_mini_mcu.sv.tpl
++++ b/hw/core-v-mini-mcu/core_v_mini_mcu.sv.tpl
+@@ -96,6 +96,8 @@ ${pad.core_v_mini_mcu_interface}
+   import core_v_mini_mcu_pkg::*;
+   import cv32e40p_apu_core_pkg::*;
+   import power_manager_pkg::*;
++  import bus_sniffer_pkg::*;  // Import the bus_sniff_bundle_t
++
+ 
+   localparam NUM_BYTES = core_v_mini_mcu_pkg::MEM_SIZE;
+   localparam DM_HALTADDRESS = core_v_mini_mcu_pkg::DEBUG_START_ADDRESS + 32'h00000800; //debug rom code (section .text in linker) starts at 0x800
+@@ -189,6 +191,54 @@ ${pad.core_v_mini_mcu_interface}
+   logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] memory_subsystem_banks_powergate_iso_n;
+   logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] memory_subsystem_clkgate_en_n;
+ 
++  /* Clock stepping module*/
++  //logic         dbg_en_gated_clk;
++  //logic [31:0]  dbg_clk_cycles;
++  //logic         dbg_stepping_trigger;
++  //logic         dbg_gated_clk;
++  //logic         dbg_clk_running;
++  //logic [31:0]  dbg_cycles_left;
++
++
++  // Create the bus sniffing bundle
++  bus_sniffer_bundle_t bus_sniffer_bundle;
++
++  // Assign signals to the bus_sniff_bundle
++  always_comb begin
++    // Core-related signals
++    bus_sniffer_bundle.core_instr_req           = core_instr_req;
++    bus_sniffer_bundle.core_instr_resp          = core_instr_resp;
++    bus_sniffer_bundle.core_data_req            = core_data_req;
++    bus_sniffer_bundle.core_data_resp           = core_data_resp;
++
++    // DMA-related signals
++    bus_sniffer_bundle.dma_read_req             = dma_read_req;
++    bus_sniffer_bundle.dma_read_resp            = dma_read_resp;
++    bus_sniffer_bundle.dma_write_req            = dma_write_req;
++    bus_sniffer_bundle.dma_write_resp           = dma_write_resp;
++    bus_sniffer_bundle.dma_addr_req             = dma_addr_req;
++    bus_sniffer_bundle.dma_addr_resp            = dma_addr_resp;
++
++    // Peripherals signals
++    bus_sniffer_bundle.ao_peripheral_slave_req  = ao_peripheral_slave_req;
++    bus_sniffer_bundle.ao_peripheral_slave_resp = ao_peripheral_slave_resp;
++    bus_sniffer_bundle.peripheral_slave_req     = peripheral_slave_req;
++    bus_sniffer_bundle.peripheral_slave_resp    = peripheral_slave_resp;
++
++    // RAM signals
++    bus_sniffer_bundle.ram_slave_req            = ram_slave_req;
++    bus_sniffer_bundle.ram_slave_resp           = ram_slave_resp;
++
++    // Memory Map SPI Region
++    bus_sniffer_bundle.flash_mem_slave_req      = flash_mem_slave_req;
++    bus_sniffer_bundle.flash_mem_slave_resp     = flash_mem_slave_resp;
++  end
++
++  // Halt when bus_sniffer is full
++  logic bus_sniffer_full;
++  logic bus_sniffer_clk_gate_o;
++  logic [NRHARTS-1:0] dm_req_or;
++
+   //pwrgate exposed outside for UPF sim flow and switch cells
+   assign cpu_subsystem_powergate_switch_no    = cpu_subsystem_pwr_ctrl_out.pwrgate_en_n;
+   assign cpu_subsystem_pwr_ctrl_in.pwrgate_ack_n = cpu_subsystem_powergate_switch_ack_ni;
+@@ -268,6 +318,8 @@ ${pad.core_v_mini_mcu_interface}
+     rv_timer_intr[1]
+   };
+ 
++  logic debug_mode; //mohammedk: should take this signal into account when filling the fifo
++
+   cpu_subsystem #(
+       .BOOT_ADDR(BOOT_ADDR),
+       .COREV_PULP(COREV_PULP),
+@@ -294,9 +346,21 @@ ${pad.core_v_mini_mcu_interface}
+       .irq_ack_o(irq_ack),
+       .irq_id_o(irq_id_out),
+       .debug_req_i(debug_core_req),
++      .debug_mode_o(debug_mode),
+       .core_sleep_o(core_sleep)
+   );
+ 
++  //clk_stepping_dbg clk_stepping_dbg_i (
++  //    .clk_i(clk_i),
++  //    .rst_ni(rst_ni),
++  //    .en_i(dbg_en_gated_clk),
++  //    .cycles_i(dbg_clk_cycles),
++  //    .cycle_start_i(dbg_stepping_trigger),
++  //    .clk_o(dbg_gated_clk),
++  //    .running_o(dbg_clk_running),
++  //    .cycles_left_o(dbg_cycles_left)
++  //);
++
+   debug_subsystem #(
+       .NRHARTS    (NRHARTS),
+       .JTAG_IDCODE(JTAG_IDCODE)
+@@ -506,18 +570,25 @@ ${pad.core_v_mini_mcu_interface}
+       .i2s_sd_o(i2s_sd_o),
+       .i2s_sd_oe_o(i2s_sd_oe_o),
+       .i2s_sd_i(i2s_sd_i),
+-      .i2s_rx_valid_o(i2s_rx_valid)
++      .i2s_rx_valid_o(i2s_rx_valid),
++      .bus_sniffer_bundle_i(bus_sniffer_bundle),
++      .bus_sniffer_clk_gate_o(bus_sniffer_clk_gate_o),
++      .debug_mode_i(debug_mode),
++      .bus_sniffer_full(bus_sniffer_full)
+   );
+ 
++  //Bus sniffer halt
++  assign dm_req_or = debug_req | {NRHARTS{bus_sniffer_full}};
++
+   // Debug_req assign
+   if (NRHARTS == 1) begin
+-    assign debug_core_req = debug_req;
+-    assign ext_debug_req_o  = 1'b0;
++    assign debug_core_req  = dm_req_or;
++    assign ext_debug_req_o = 1'b0;
+   end else begin
+     always @(*) begin
+       for (int i = 0; i < NRHARTS; i++) begin
+-        if (i == 0) debug_core_req = debug_req[i];
+-        else ext_debug_req_o[i-1] = debug_req[i];
++        if (i == 0) debug_core_req = dm_req_or[i];
++        else ext_debug_req_o[i-1] = dm_req_or[i];
+       end
+     end
+   end
+diff --git a/hw/core-v-mini-mcu/cpu_subsystem.sv b/hw/core-v-mini-mcu/cpu_subsystem.sv
+index 51b0c4e..42e3c9b 100644
+--- a/hw/core-v-mini-mcu/cpu_subsystem.sv
++++ b/hw/core-v-mini-mcu/cpu_subsystem.sv
+@@ -41,7 +41,8 @@ module cpu_subsystem
+     output logic [ 4:0] irq_id_o,
+ 
+     // Debug Interface
+-    input logic debug_req_i,
++    input  logic debug_req_i,
++    output logic debug_mode_o,
+ 
+     // sleep
+     output logic core_sleep_o
+@@ -98,6 +99,7 @@ module cpu_subsystem
+         .dm_exception_addr_i(32'h0),
+         .dm_halt_addr_i(DM_HALTADDRESS),
+         .crash_dump_o(),
++        .debug_mode_o,
+ 
+         .fetch_enable_i(fetch_enable),
+ 
+diff --git a/hw/core-v-mini-mcu/cpu_subsystem.sv.tpl b/hw/core-v-mini-mcu/cpu_subsystem.sv.tpl
+index cddd1c3..9cb4a44 100644
+--- a/hw/core-v-mini-mcu/cpu_subsystem.sv.tpl
++++ b/hw/core-v-mini-mcu/cpu_subsystem.sv.tpl
+@@ -42,6 +42,7 @@ module cpu_subsystem
+ 
+     // Debug Interface
+     input logic debug_req_i,
++    output logic debug_mode_o,
+ 
+     // sleep
+     output logic core_sleep_o
+@@ -104,6 +105,7 @@ module cpu_subsystem
+         .dm_exception_addr_i(32'h0),
+         .dm_halt_addr_i(DM_HALTADDRESS),
+         .crash_dump_o(),
++        .debug_mode_o,
+ 
+         .fetch_enable_i(fetch_enable),
+ 
+diff --git a/hw/core-v-mini-mcu/peripheral_subsystem.sv b/hw/core-v-mini-mcu/peripheral_subsystem.sv
+index 4fa663e..ddabd3c 100644
+--- a/hw/core-v-mini-mcu/peripheral_subsystem.sv
++++ b/hw/core-v-mini-mcu/peripheral_subsystem.sv
+@@ -5,12 +5,15 @@
+ module peripheral_subsystem
+   import obi_pkg::*;
+   import reg_pkg::*;
++  import bus_sniffer_pkg::*;
+ #(
+     //do not touch these parameters
+     parameter NEXT_INT_RND = core_v_mini_mcu_pkg::NEXT_INT == 0 ? 1 : core_v_mini_mcu_pkg::NEXT_INT
+ ) (
+     input logic clk_i,
+     input logic rst_ni,
++    //debug
++    input logic debug_mode_i, //should take this signal into account when filling the fifo
+ 
+     // Clock-gating signal
+     input logic clk_gate_en_ni,
+@@ -89,7 +92,12 @@ module peripheral_subsystem
+     // PDM2PCM Interface
+     output logic pdm2pcm_clk_o,
+     output logic pdm2pcm_clk_en_o,
+-    input  logic pdm2pcm_pdm_i
++    input  logic pdm2pcm_pdm_i,
++
++    //Bus sniffer interface
++    output logic bus_sniffer_full,
++    output logic bus_sniffer_clk_gate_o,
++    input bus_sniffer_bundle_t bus_sniffer_bundle_i
+ );
+ 
+   import core_v_mini_mcu_pkg::*;
+@@ -470,4 +478,26 @@ module peripheral_subsystem
+       .i2s_rx_valid_o(i2s_rx_valid_o)
+   );
+ 
++
++
++  localparam FRAME_WIDTH = 128;
++  localparam FIFO_DEPTH = 16384;
++
++  bus_sniffer #(
++      .reg_req_t  (reg_pkg::reg_req_t),
++      .reg_rsp_t  (reg_pkg::reg_rsp_t),
++      .FRAME_WIDTH(FRAME_WIDTH),
++      .FIFO_DEPTH (FIFO_DEPTH)
++  ) bus_sniffer_i (
++      .clk_i               (clk_i),
++      .rst_ni              (rst_ni),
++      .reg_req_i           (peripheral_slv_req[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
++      .reg_rsp_o           (peripheral_slv_rsp[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
++      .bus_sniffer_bundle_i(bus_sniffer_bundle_i),
++      .clk_gate_o          (bus_sniffer_clk_gate_o),
++      .halt_state_o        (bus_sniffer_full),
++      .debug_mode_i
++  );
++
++
+ endmodule : peripheral_subsystem
+diff --git a/hw/core-v-mini-mcu/peripheral_subsystem.sv.tpl b/hw/core-v-mini-mcu/peripheral_subsystem.sv.tpl
+index 895bde2..f336732 100644
+--- a/hw/core-v-mini-mcu/peripheral_subsystem.sv.tpl
++++ b/hw/core-v-mini-mcu/peripheral_subsystem.sv.tpl
+@@ -5,12 +5,15 @@
+ module peripheral_subsystem
+   import obi_pkg::*;
+   import reg_pkg::*;
++  import bus_sniffer_pkg::*;
+ #(
+     //do not touch these parameters
+     parameter NEXT_INT_RND         = core_v_mini_mcu_pkg::NEXT_INT == 0 ? 1 : core_v_mini_mcu_pkg::NEXT_INT
+ ) (
+     input logic clk_i,
+     input logic rst_ni,
++    //debug
++    input logic debug_mode_i, //should take this signal into account when filling the fifo
+ 
+     // Clock-gating signal
+     input logic clk_gate_en_ni,
+@@ -89,7 +92,12 @@ module peripheral_subsystem
+     // PDM2PCM Interface
+     output logic pdm2pcm_clk_o,
+     output logic pdm2pcm_clk_en_o,
+-    input  logic pdm2pcm_pdm_i
++    input  logic pdm2pcm_pdm_i,
++
++    //Bus sniffer interface
++    output logic bus_sniffer_full,
++    output logic bus_sniffer_clk_gate_o,
++    input bus_sniffer_bundle_t bus_sniffer_bundle_i
+ );
+ 
+   import core_v_mini_mcu_pkg::*;
+@@ -569,4 +577,26 @@ module peripheral_subsystem
+   assign i2s_rx_valid_o   = 1'b0;
+ % endif
+ 
++
++
++  localparam FRAME_WIDTH = 128;
++  localparam FIFO_DEPTH = 16384;
++
++  bus_sniffer #(
++      .reg_req_t  (reg_pkg::reg_req_t),
++      .reg_rsp_t  (reg_pkg::reg_rsp_t),
++      .FRAME_WIDTH(FRAME_WIDTH),
++      .FIFO_DEPTH (FIFO_DEPTH)
++  ) bus_sniffer_i (
++      .clk_i               (clk_i),
++      .rst_ni              (rst_ni),
++      .reg_req_i           (peripheral_slv_req[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
++      .reg_rsp_o           (peripheral_slv_rsp[core_v_mini_mcu_pkg::BUS_SNIFFER_IDX]),
++      .bus_sniffer_bundle_i(bus_sniffer_bundle_i),
++      .clk_gate_o          (bus_sniffer_clk_gate_o),
++      .halt_state_o        (bus_sniffer_full),
++      .debug_mode_i
++  );
++
++
+ endmodule : peripheral_subsystem
+diff --git a/hw/ip/bus_sniffer/bus_sniffer.core b/hw/ip/bus_sniffer/bus_sniffer.core
+new file mode 100644
+index 0000000..333be6e
+--- /dev/null
++++ b/hw/ip/bus_sniffer/bus_sniffer.core
+@@ -0,0 +1,22 @@
++CAPI=2:
++
++name: "x-heep:ip:bus_sniffer"
++description: "core-v-mini-mcu bus sniffer peripheral"
++
++filesets:
++  files_rtl:
++    depend:
++      - pulp-platform.org::common_cells
++    files:
++      - rtl/bus_sniffer_reg_pkg.sv 
++      - rtl/bus_sniffer_reg_top.sv 
++      - rtl/bus_sniffer_pkg.sv 
++      - rtl/fifo_bus_sniffer.sv
++      - rtl/bus_sniffer.sv 
++    
++    file_type: systemVerilogSource
++
++targets:
++  default:
++    filesets:
++    - files_rtl
+diff --git a/hw/ip/bus_sniffer/bus_sniffer.sh b/hw/ip/bus_sniffer/bus_sniffer.sh
+new file mode 100755
+index 0000000..f8637cd
+--- /dev/null
++++ b/hw/ip/bus_sniffer/bus_sniffer.sh
+@@ -0,0 +1,28 @@
++#!/bin/sh
++
++echo "Generating RTL"
++./../../vendor/pulp_platform_register_interface/vendor/lowrisc_opentitan/util/regtool.py -r -t rtl data/bus_sniffer.hjson
++
++# Insert the comment above the assignment for reg_addr
++# Searches for the pattern "assign reg_addr = reg_intf_req.addr;" and inserts the comment above it.
++sed -i '/assign reg_addr = reg_intf_req.addr;/i /* verilator lint_off WIDTH */' ./rtl/bus_sniffer_reg_top.sv
++
++# Insert the comment above the module declaration
++# Searches for the pattern "module bus_sniffer_reg_top_intf #(" and inserts the comment above it.
++# sed -i '/module bus_sniffer_reg_top_intf ;/i /* verilator lint_off DECLFILENAME */' ./rtl/bus_sniffer_reg_top.sv
++
++awk 'BEGIN { found=0 } 
++     /^module/ { 
++         if (found >= 1) 
++             print "/* verilator lint_off DECLFILENAME */"; 
++         found++;
++     } 
++     { print }' ./rtl/bus_sniffer_reg_top.sv > tmp && mv tmp ./rtl/bus_sniffer_reg_top.sv
++
++
++
++mkdir -p ../../../sw/device/lib/drivers/bus_sniffer/
++touch ../../../sw/device/lib/drivers/bus_sniffer/bus_sniffer_regs.h
++
++echo "Generating SW"
++./../../vendor/pulp_platform_register_interface/vendor/lowrisc_opentitan/util/regtool.py --cdefines -o ../../../sw/device/lib/drivers/bus_sniffer/bus_sniffer_regs.h data/bus_sniffer.hjson
+diff --git a/hw/ip/bus_sniffer/data/bus_sniffer.hjson b/hw/ip/bus_sniffer/data/bus_sniffer.hjson
+new file mode 100644
+index 0000000..7e49651
+--- /dev/null
++++ b/hw/ip/bus_sniffer/data/bus_sniffer.hjson
+@@ -0,0 +1,69 @@
++{
++  name: "bus_sniffer"
++  clock_primary: "clk_i"
++  bus_interfaces: [
++    { protocol: "reg_iface", direction: "device" }
++  ]
++  regwidth: "32"
++  registers: [
++    {
++      name: "SNI_CTRL"
++      desc: "Control register: Bit0 enables the bus sniffer; Bit1 resets the FIFO; Bit2 if the frame is stored in sw"
++      swaccess: "rw"
++      hwaccess: "hro"
++      fields: [
++        { bits: "0",   name: "EN",            desc: "Enable bus sniffer" }
++        { bits: "1",   name: "RST_FIFO",      desc: "Reset FIFO buffer" }
++        { bits: "2",   name: "FRAME_READ",    desc: "Frame Stored", hwaccess: "hrw" }
++        { bits: "3",   name: "ENABLE_GATING", desc: "Enable the clock gating" }
++      ]
++    }
++    {
++      name: "SNI_STATUS"
++      desc: "Status register: Bit0 = EMPTY, Bit1 = FULL, Bit2 = FRAME_AVAIL., Bit3 = FRAME_READ"
++      swaccess: "ro"
++      hwaccess: "hrw"
++      fields: [
++        { bits: "0", name: "EMPTY",      desc: "FIFO is empty"   }
++        { bits: "1", name: "FULL",       desc: "FIFO is full"    }
++        { bits: "2", name: "FRAME_AVAIL",desc: "Frame available" }
++      ]
++    }
++    {
++      name: "SNI_DATA0"
++      desc: "Data register 0: Upper 32 bits of captured frame."
++      swaccess: "ro"
++      hwaccess: "hrw"
++      fields: [
++        { bits: "31:0", name: "DATA", desc: "Bits 127:96" }
++      ]
++    }
++    {
++      name: "SNI_DATA1"
++      desc: "Data register 1: Next 32 bits of captured frame."
++      swaccess: "ro"
++      hwaccess: "hrw"
++      fields: [
++        { bits: "31:0", name: "DATA", desc: "Bits 95:64" }
++      ]
++    }
++    {
++      name: "SNI_DATA2"
++      desc: "Data register 2: Next 32 bits of captured frame."
++      swaccess: "ro"
++      hwaccess: "hrw"
++      fields: [
++        { bits: "31:0", name: "DATA", desc: "Bits 63:32" }
++      ]
++    }
++    {
++      name: "SNI_DATA3"
++      desc: "Data register 3: Lower 32 bits of captured frame."
++      swaccess: "ro"
++      hwaccess: "hrw"
++      fields: [
++        { bits: "31:0", name: "DATA", desc: "Bits 31:0" }
++      ]
++    }
++  ]
++}
+diff --git a/hw/ip/bus_sniffer/dpi/bus_sniffer_dpi.cc b/hw/ip/bus_sniffer/dpi/bus_sniffer_dpi.cc
+new file mode 100644
+index 0000000..642c576
+--- /dev/null
++++ b/hw/ip/bus_sniffer/dpi/bus_sniffer_dpi.cc
+@@ -0,0 +1,147 @@
++// hw/ip/bus_sniffer/dpi/bus_sniffer_dpi.cc
++#include <svdpi.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <atomic>
++#include <thread>
++#include <chrono>
++#include <stdlib.h>
++
++struct Frame { uint32_t w[4]; };
++
++// Ring SPSC
++static const uint32_t RB_SIZE = 1u << 16;   // 65536 frame
++static Frame* ring = nullptr;
++static std::atomic<uint32_t> head{0}; // producer (SV)
++static std::atomic<uint32_t> tail{0}; // consumer (C)
++static std::atomic<bool> running{false};
++
++// Output
++static FILE* fbin = nullptr;   // binario 16B/frame
++static FILE* fcsv = nullptr;   // CSV leggibile
++
++// Console print (opzionale, controllata da env-var)
++static bool     print_enable = false;
++static unsigned print_every  = 1;    // stampa 1 ogni N frame
++static unsigned print_count  = 0;
++
++static inline uint32_t rb_used(uint32_t h, uint32_t t){ return (h - t) & (RB_SIZE - 1); }
++static inline uint32_t rb_free(uint32_t h, uint32_t t){ return (RB_SIZE - 1) - rb_used(h,t); }
++
++// Decode dei 128 bit (DATA0=MSW) in campi
++static inline void decode_to_fields(const Frame& fr,
++                                    uint32_t &src,
++                                    uint32_t &req_ts,
++                                    uint32_t &resp_ts,
++                                    uint32_t &addr,
++                                    uint32_t &data,
++                                    uint32_t &be,
++                                    uint32_t &we,
++                                    uint32_t &valid,
++                                    uint32_t &gnt)
++{
++  const uint32_t w0 = fr.w[0]; // 127..96
++  const uint32_t w1 = fr.w[1]; // 95..64
++  const uint32_t w2 = fr.w[2]; // 63..32
++  const uint32_t w3 = fr.w[3]; // 31..0
++
++  src     = (w0 >> 28) & 0xF;
++  req_ts  = ((w0 & 0x0FFFFFFFu) << 4) | (w1 >> 28);
++  resp_ts = (w1 >> 12) & 0xFFFFu;
++  addr    = ((w1 & 0xFFFu) << 20) | (w2 >> 12);
++  data    = ((w2 & 0xFFFu) << 20) | (w3 >> 12);
++  be      = (w3 >> 8) & 0xFu;
++  we      = (w3 >> 7) & 0x1u;
++  valid   = (w3 >> 6) & 0x1u;
++  gnt     = (w3 >> 5) & 0x1u;
++}
++
++static void start_consumer() {
++  if (running.load()) return;
++
++  ring = (Frame*)malloc(sizeof(Frame)*RB_SIZE);
++  if (!ring) { fprintf(stderr, "[sniffer_dpi] malloc ring failed\n"); abort(); }
++
++  fbin = fopen("sniffer_frames.bin","wb");
++  if (!fbin) { fprintf(stderr, "[sniffer_dpi] fopen bin failed\n"); abort(); }
++
++  fcsv = fopen("sniffer_frames.csv","w");
++  if (!fcsv) { fprintf(stderr, "[sniffer_dpi] fopen csv failed\n"); abort(); }
++  fprintf(fcsv, "src,req_ts,resp_ts,address,data,be,we,valid,gnt\n");
++
++  // buffer grandi per meno syscalls
++  setvbuf(fbin, NULL, _IOFBF, 1<<20);
++  setvbuf(fcsv, NULL, _IOFBF, 1<<20);
++
++  // Stampa a video opzionale
++  const char* p  = getenv("SNIFFER_PRINT");          // "1" per abilitare
++  const char* pe = getenv("SNIFFER_PRINT_EVERY");    // es. "100"
++  if (p && *p && p[0] != '0') print_enable = true;
++  if (pe) { unsigned v = (unsigned)atoi(pe); if (v) print_every = v; }
++
++  running.store(true, std::memory_order_release);
++
++  std::thread([](){
++    while (running.load(std::memory_order_acquire)) {
++      uint32_t t = tail.load(std::memory_order_relaxed);
++      uint32_t h = head.load(std::memory_order_acquire);
++      while (t != h) {
++        const Frame& fr = ring[t];
++
++        // 1) Binario
++        fwrite(&fr, sizeof(Frame), 1, fbin);
++
++        // 2) CSV
++        uint32_t src, req_ts, resp_ts, addr, data, be, we, valid, gnt;
++        decode_to_fields(fr, src, req_ts, resp_ts, addr, data, be, we, valid, gnt);
++        fprintf(fcsv, "%u,%u,%u,0x%08X,0x%08X,%X,%u,%u,%u\n",
++                src, req_ts, resp_ts, addr, data, be, we, valid, gnt);
++
++        // 3) Console (opzionale)
++        if (print_enable) {
++          if ((++print_count % print_every) == 0) {
++            fprintf(stderr,
++              "src=%u ts=%08X/%04X addr=%08X data=%08X be=%X we=%u v%u g%u\n",
++              src, req_ts, resp_ts, addr, data, be, we, valid, gnt);
++          }
++        }
++
++        t = (t + 1) & (RB_SIZE - 1);
++      }
++      tail.store(t, std::memory_order_release);
++
++      fflush(fbin);
++      fflush(fcsv);
++      std::this_thread::sleep_for(std::chrono::milliseconds(1));
++    }
++  }).detach();
++}
++
++extern "C" int sniffer_dpi_push(int stream_id, int nwords,
++                                unsigned w0, unsigned w1, unsigned w2, unsigned w3)
++{
++  (void)stream_id;
++  if (nwords != 4) return 0;
++  if (!ring) start_consumer();
++
++  uint32_t h = head.load(std::memory_order_relaxed);
++  uint32_t t = tail.load(std::memory_order_acquire);
++  if (rb_free(h,t) == 0) return 0; // backpressure
++
++  ring[h].w[0] = w0;  // DATA0 = MSW
++  ring[h].w[1] = w1;
++  ring[h].w[2] = w2;
++  ring[h].w[3] = w3;
++
++  head.store((h + 1) & (RB_SIZE - 1), std::memory_order_release);
++  return 1;
++}
++
++extern "C" void sniffer_dpi_close(void) {
++  running.store(false, std::memory_order_release);
++  std::this_thread::sleep_for(std::chrono::milliseconds(5));
++
++  if (fbin) { fflush(fbin); fclose(fbin); fbin = nullptr; }
++  if (fcsv) { fflush(fcsv); fclose(fcsv); fcsv = nullptr; }
++  if (ring) { free(ring); ring = nullptr; }
++}
+diff --git a/hw/ip/bus_sniffer/rtl/bus_sniffer.sv b/hw/ip/bus_sniffer/rtl/bus_sniffer.sv
+new file mode 100644
+index 0000000..1848270
+--- /dev/null
++++ b/hw/ip/bus_sniffer/rtl/bus_sniffer.sv
+@@ -0,0 +1,735 @@
++// === Enable & DPI import ===
++parameter bit DPI_ENABLE = 1'b1;     // metti 0 per disabilitare rapidamente
++parameter int DPI_STREAM_ID = 0;
++
++import "DPI-C" function int sniffer_dpi_push
++(
++  input int stream_id,
++  input int nwords,                  // 4 fisse per il tuo frame
++  input int unsigned w0,             // DATA0 = MSW
++  input int unsigned w1,
++  input int unsigned w2,
++  input int unsigned w3
++);
++
++
++module bus_sniffer
++  import bus_sniffer_pkg::*;
++  import bus_sniffer_reg_pkg::*;
++#(
++    parameter type reg_req_t = logic,
++    parameter type reg_rsp_t = logic,
++    parameter FRAME_WIDTH   = 128,
++    parameter FIFO_DEPTH    = 1024,
++    parameter TABLE_DEPTH   = 10,
++    parameter NUM_CHANNELS  = 10  // how many bus channels we can monitor
++) (
++    input logic clk_i,
++    input logic rst_ni,
++
++    // Register interface
++    input  reg_req_t reg_req_i,
++    output reg_rsp_t reg_rsp_o,
++
++
++    output logic                halt_state_o,
++    output logic                clk_gate_o,
++    input  bus_sniffer_bundle_t bus_sniffer_bundle_i,
++    input  logic                debug_mode_i
++);
++
++
++  // Memory mapped registers interface signals
++    /* verilator lint_off UNUSED */
++  bus_sniffer_reg2hw_t reg2hw;
++  bus_sniffer_hw2reg_t hw2reg;
++
++  logic [31:0] sni_data0;
++  logic [31:0] sni_data1;
++  logic [31:0] sni_data2;
++  logic [31:0] sni_data3;
++
++  logic rst_fifo_reg;
++  logic rst_fifo_reg_ff;
++  logic rst_fifo;
++
++  logic frame_read_q_d;           // 1-cycle delayed copy of .q
++  wire  frame_read_rise;          // rising-edge detect of SW write
++  logic frame_pending;            // stays high until next SW ack
++
++  logic enable_gating_reg;
++  wire capture_en;
++  assign capture_en = ~debug_mode_i;  // cattura solo fuori dal debug
++
++  // Status + data -> HW drives them continuously
++  assign hw2reg.sni_status.empty.de       = 1'b1;
++  assign hw2reg.sni_status.full.de        = 1'b1;
++  assign hw2reg.sni_status.frame_avail.de = 1'b1;
++  assign hw2reg.sni_status.empty.d        = empty;
++  assign hw2reg.sni_status.full.d         = full;
++  // CHANGED: drive sticky 'frame_pending', not a 1-cycle pulse
++  // assign hw2reg.sni_status.frame_avail.d  = pop_fifo;
++  assign hw2reg.sni_status.frame_avail.d  = frame_pending;
++
++  // auto-clear pulse for FRAME_READ (drive hw2reg only via continuous assigns)
++  logic frame_read_autoclr_pulse;
++  assign hw2reg.sni_ctrl.frame_read.de = frame_read_autoclr_pulse; // 1-cycle when we want to clear
++  assign hw2reg.sni_ctrl.frame_read.d  = 1'b0;                     // clear value
++
++  assign hw2reg.sni_data0.de              = 1'b1;
++  assign hw2reg.sni_data1.de              = 1'b1;
++  assign hw2reg.sni_data2.de              = 1'b1;
++  assign hw2reg.sni_data3.de              = 1'b1;
++  assign hw2reg.sni_data0.d               = sni_data0;
++  assign hw2reg.sni_data1.d               = sni_data1;
++  assign hw2reg.sni_data2.d               = sni_data2;
++  assign hw2reg.sni_data3.d               = sni_data3;
++
++  // CHANGED: no continuous assign to frame_read.de here anymore
++  // (drive it procedurally when we need to auto-clear)
++  // assign hw2reg.sni_ctrl.frame_read.de    = frame_read_ack;
++  // assign frame_read_sw                    = reg2hw.sni_ctrl.frame_read;
++  // assign frame_read_sw_q                  = reg2hw.sni_ctrl.frame_read.q;
++
++
++  assign rst_fifo_reg                     = reg2hw.sni_ctrl.rst_fifo;
++  assign enable_gating_reg                = reg2hw.sni_ctrl.enable_gating;
++
++  // SW ack rising-edge detection
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      frame_read_q_d <= 1'b0;
++    end else begin
++      frame_read_q_d <= reg2hw.sni_ctrl.frame_read.q;
++    end
++  end
++  assign frame_read_rise = reg2hw.sni_ctrl.frame_read.q & ~frame_read_q_d;
++
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni)                    frame_pending <= 1'b0;
++    else if (rst_fifo)              frame_pending <= 1'b0;
++    else if (pop_fifo && !DPI_ENABLE) frame_pending <= 1'b1; // <— non settare in DPI
++    else if (frame_read_rise)       frame_pending <= 1'b0;
++  end
++  //--------------------------------------------------------------------------
++  // timestamp; only use the lower 16 bits
++  //--------------------------------------------------------------------------
++  logic [31:0] timestamp_q;
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) timestamp_q <= 32'd0;
++    else timestamp_q <= timestamp_q + 32'd1;
++  end
++
++  //--------------------------------------------------------------------------
++  // FIFO Instantiation
++  //--------------------------------------------------------------------------
++  // FIFO control signals:
++  logic push_fifo;
++  logic pop_fifo;
++  logic [FRAME_WIDTH-1:0] fifo_data_in;
++  logic [FRAME_WIDTH-1:0] fifo_data_out;
++  logic full, empty;
++
++  //Whenever the rst_fifo register is written by the user or the system exits from debug mode, change the value of rst_fifo_reg_ff
++  //rst_fifo_reg_ff is used for sampling the debug mode together with the reset.
++  //This prevent the fifo to fill during debug mode, that will prevent the sigtrap to happen.
++
++  always_ff @(posedge rst_fifo_reg or negedge debug_mode_i) begin
++    /* verilator lint_off SYNCASYNCNET */
++    if (rst_fifo_reg && debug_mode_i) rst_fifo_reg_ff <= rst_fifo_reg;
++    else if (!debug_mode_i) rst_fifo_reg_ff <= 0;
++
++  end
++  // Reset logic
++  assign rst_fifo = (debug_mode_i) ? (rst_fifo_reg_ff || !rst_ni) : rst_fifo_reg || !rst_ni;
++
++
++
++  fifo_bus_sniffer #(
++      .DATA_WIDTH(FRAME_WIDTH),
++      .DEPTH(FIFO_DEPTH)
++  ) fifo_bus_sniffer_inst (
++      .clk(clk_i),
++      .rst_ni(~rst_fifo),
++      .wr_en(push_fifo),
++      .rd_en(pop_fifo),
++      .data_in(fifo_data_in),
++      .data_out(fifo_data_out),
++      .full(full),
++      .empty(empty),
++      .count()
++  );
++
++  // ---------------------------------------------------------------------------
++  // find_free_slot()
++  // Returns the index of the first entry that is not free_slot, or -1 if none.
++  // ---------------------------------------------------------------------------
++  function automatic int find_free_slot(input partial_entry_t table_tmp[TABLE_DEPTH]);
++    for (int i = 0; i < TABLE_DEPTH; i++) begin
++      if (!table_tmp[i].free_slot) begin
++        return i;
++      end
++    end
++    return -1;  // No free slot
++  endfunction
++
++  // Partial entry table
++  partial_entry_t transaction_table[TABLE_DEPTH];
++
++  //  On each clock, capture new requests from each channel
++  //     if req && gnt are high, store them in a free table entry.
++  //     If it's a write, mark the frame as "complete" immediately.
++  //     If it's a read, mark waiting_resp=1.
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      // init table by freeing all the elements
++      for (int i = 0; i < TABLE_DEPTH; i++) begin
++        transaction_table[i].free_slot <= 1'b0;
++      end
++
++    end else begin
++      // Temp copy of the table to compute next state of all the channels simultaneously
++      partial_entry_t table_tmp[TABLE_DEPTH];
++
++      // Copy the elements occupied
++      for (int i = 0; i < TABLE_DEPTH; i++) begin
++        table_tmp[i] = transaction_table[i];
++      end
++
++      //---------------------------------------------------------------
++      // Check all channels in priority order
++      //---------------------------------------------------------------
++
++      // Iterate through channels
++      for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
++        logic req, gnt, we;
++        logic [31:0] addr, wdata;
++        logic [3:0] be;
++        logic [3:0] channel_id;
++
++        // Get signals for current channel
++        case (ch)
++          CH_CORE_INSTR: begin
++            req = bus_sniffer_bundle_i.core_instr_req.req;
++            gnt = bus_sniffer_bundle_i.core_instr_resp.gnt;
++            we = bus_sniffer_bundle_i.core_instr_req.we;
++            addr = bus_sniffer_bundle_i.core_instr_req.addr;
++            wdata = bus_sniffer_bundle_i.core_instr_req.wdata;
++            be = bus_sniffer_bundle_i.core_instr_req.be;
++            channel_id = CORE_INSTR;
++          end
++          CH_CORE_DATA: begin
++            req = bus_sniffer_bundle_i.core_data_req.req;
++            gnt = bus_sniffer_bundle_i.core_data_resp.gnt;
++            we = bus_sniffer_bundle_i.core_data_req.we;
++            addr = bus_sniffer_bundle_i.core_data_req.addr;
++            wdata = bus_sniffer_bundle_i.core_data_req.wdata;
++            be = bus_sniffer_bundle_i.core_data_req.be;
++            channel_id = CORE_DATA;
++          end
++          CH_AO_PERIPH: begin
++            req = bus_sniffer_bundle_i.ao_peripheral_slave_req.req;
++            gnt = bus_sniffer_bundle_i.ao_peripheral_slave_resp.gnt;
++            we = bus_sniffer_bundle_i.ao_peripheral_slave_req.we;
++            addr = bus_sniffer_bundle_i.ao_peripheral_slave_req.addr;
++            wdata = bus_sniffer_bundle_i.ao_peripheral_slave_req.wdata;
++            be = bus_sniffer_bundle_i.ao_peripheral_slave_req.be;
++            channel_id = AO_PERIPH;
++          end
++          CH_PERIPH: begin
++            req = bus_sniffer_bundle_i.peripheral_slave_req.req;
++            gnt = bus_sniffer_bundle_i.peripheral_slave_resp.gnt;
++            we = bus_sniffer_bundle_i.peripheral_slave_req.we;
++            addr = bus_sniffer_bundle_i.peripheral_slave_req.addr;
++            wdata = bus_sniffer_bundle_i.peripheral_slave_req.wdata;
++            be = bus_sniffer_bundle_i.peripheral_slave_req.be;
++            channel_id = PERIPH;
++          end
++          CH_RAM0: begin
++            req = bus_sniffer_bundle_i.ram_slave_req[0].req;
++            gnt = bus_sniffer_bundle_i.ram_slave_resp[0].gnt;
++            we = bus_sniffer_bundle_i.ram_slave_req[0].we;
++            addr = bus_sniffer_bundle_i.ram_slave_req[0].addr;
++            wdata = bus_sniffer_bundle_i.ram_slave_req[0].wdata;
++            be = bus_sniffer_bundle_i.ram_slave_req[0].be;
++            channel_id = RAM0;
++          end
++          CH_RAM1: begin
++            req = bus_sniffer_bundle_i.ram_slave_req[1].req;
++            gnt = bus_sniffer_bundle_i.ram_slave_resp[1].gnt;
++            we = bus_sniffer_bundle_i.ram_slave_req[1].we;
++            addr = bus_sniffer_bundle_i.ram_slave_req[1].addr;
++            wdata = bus_sniffer_bundle_i.ram_slave_req[1].wdata;
++            be = bus_sniffer_bundle_i.ram_slave_req[1].be;
++            channel_id = RAM1;
++          end
++          CH_FLASH: begin
++            req = bus_sniffer_bundle_i.flash_mem_slave_req.req;
++            gnt = bus_sniffer_bundle_i.flash_mem_slave_resp.gnt;
++            we = bus_sniffer_bundle_i.flash_mem_slave_req.we;
++            addr = bus_sniffer_bundle_i.flash_mem_slave_req.addr;
++            wdata = bus_sniffer_bundle_i.flash_mem_slave_req.wdata;
++            be = bus_sniffer_bundle_i.flash_mem_slave_req.be;
++            channel_id = FLASH;
++          end
++          CH_DMA_READ: begin
++            req = bus_sniffer_bundle_i.dma_read_req.req;
++            gnt = bus_sniffer_bundle_i.dma_read_resp.gnt;
++            we = bus_sniffer_bundle_i.dma_read_req.we;
++            addr = bus_sniffer_bundle_i.dma_read_req.addr;
++            wdata = bus_sniffer_bundle_i.dma_read_req.wdata;
++            be = bus_sniffer_bundle_i.dma_read_req.be;
++            channel_id = DMA_READ;
++          end
++          CH_DMA_WRITE: begin
++            req = bus_sniffer_bundle_i.dma_write_req.req;
++            gnt = bus_sniffer_bundle_i.dma_write_resp.gnt;
++            we = bus_sniffer_bundle_i.dma_write_req.we;
++            addr = bus_sniffer_bundle_i.dma_write_req.addr;
++            wdata = bus_sniffer_bundle_i.dma_write_req.wdata;
++            be = bus_sniffer_bundle_i.dma_write_req.be;
++            channel_id = DMA_WRITE;
++          end
++          CH_DMA_ADDR: begin
++            req = bus_sniffer_bundle_i.dma_addr_req.req;
++            gnt = bus_sniffer_bundle_i.dma_addr_resp.gnt;
++            we = bus_sniffer_bundle_i.dma_addr_req.we;
++            addr = bus_sniffer_bundle_i.dma_addr_req.addr;
++            wdata = bus_sniffer_bundle_i.dma_addr_req.wdata;
++            be = bus_sniffer_bundle_i.dma_addr_req.be;
++            channel_id = DMA_ADDR;
++          end
++        endcase
++
++        // If channel request is active and granted, allocate a slot in the table
++        if (req && gnt) begin
++          int idx = find_free_slot(table_tmp);  // Use temp table
++          if (idx >= 0) begin
++            // Update temp table (not actual table yet)
++            table_tmp[idx].free_slot           = 1'b1;
++            table_tmp[idx].waiting_resp        = ~we;
++            table_tmp[idx].channel_id          = channel_id;
++            table_tmp[idx].frame.source_id     = channel_id;
++            table_tmp[idx].frame.req_timestamp = timestamp_q;
++            table_tmp[idx].frame.address       = addr;
++            table_tmp[idx].frame.byte_enable   = be;
++            table_tmp[idx].frame.we            = we;
++            table_tmp[idx].frame.valid         = 1'b1;
++            table_tmp[idx].frame.gnt           = 1'b1;  // store handshake
++
++            if (we) begin
++              // For writes, the data is known right now
++              table_tmp[idx].frame.data           = wdata;
++              table_tmp[idx].frame.resp_timestamp = 16'h0001;
++            end else begin
++              // For reads, data & resp_timestamp come later
++              table_tmp[idx].frame.data           = '0;
++              table_tmp[idx].frame.resp_timestamp = '0;
++            end
++          end
++        end
++      end
++
++
++      for (int i = 0; i < TABLE_DEPTH; i++) begin
++        transaction_table[i] <= table_tmp[i];
++      end
++    end
++  end
++
++  // On each clock, capture any responses. If we see rvalid for a channel,
++  // we find the matching table entry that is waiting_resp=1 for that channel,
++  // fill in the read data, set resp_timestamp, and mark it "complete".
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      // no operation
++    end else begin
++      //CORE DATA
++      logic [31:0] diff;
++
++      if (bus_sniffer_bundle_i.core_data_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == CORE_DATA) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.core_data_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;
++          end
++        end
++      end
++      // CORE_INSTR
++      if (bus_sniffer_bundle_i.core_instr_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == CORE_INSTR) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.core_instr_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;
++          end
++        end
++      end
++      // AO_PERIPH
++      if (bus_sniffer_bundle_i.ao_peripheral_slave_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == AO_PERIPH) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.ao_peripheral_slave_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++      // PERIPH
++      if (bus_sniffer_bundle_i.peripheral_slave_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == PERIPH) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.peripheral_slave_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++      // RAM0
++      if (bus_sniffer_bundle_i.ram_slave_resp[0].rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == RAM0) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.ram_slave_resp[0].rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++      // RAM1
++      if (bus_sniffer_bundle_i.ram_slave_resp[1].rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == RAM1) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.ram_slave_resp[1].rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++      // FLASH
++      if (bus_sniffer_bundle_i.flash_mem_slave_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == FLASH) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.flash_mem_slave_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++      // DMA
++      if (bus_sniffer_bundle_i.dma_read_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == DMA_READ) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.dma_read_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++      // DMA
++      if (bus_sniffer_bundle_i.dma_write_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == DMA_WRITE) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.dma_write_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++      // DMA
++      if (bus_sniffer_bundle_i.dma_addr_resp.rvalid) begin
++        for (int i = 0; i < TABLE_DEPTH; i++) begin
++          if (transaction_table[i].free_slot && 
++                        transaction_table[i].waiting_resp && 
++                        transaction_table[i].channel_id == DMA_ADDR) begin
++
++            diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
++            transaction_table[i].frame.data <= bus_sniffer_bundle_i.dma_addr_resp.rdata;
++            transaction_table[i].frame.resp_timestamp <= diff[15:0];
++            transaction_table[i].waiting_resp <= 1'b0;  // no longer waiting
++          end
++        end
++      end
++    end
++  end
++
++
++  logic [31:0] push_idx;  // we’ll store -1 if none found
++  always_comb begin
++    push_idx = -1;  // default: no entry found
++    // Simple priority: pick the first valid & !waiting entry
++    for (int i = 0; i < TABLE_DEPTH; i++) begin
++      if (transaction_table[i].free_slot && !transaction_table[i].waiting_resp) begin
++        push_idx = i;
++        break;
++      end
++    end
++  end
++
++  //------------------------------------------------------------------------ 
++  // FIFO Push logic
++  //------------------------------------------------------------------------ 
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      push_fifo    <= 1'b0;
++      fifo_data_in <= '0;
++    end else begin
++      // By default, no push this cycle
++      push_fifo <= 1'b0;
++
++      // If we found a complete entry AND FIFO not full AND not in debug, push it
++      if (push_idx != -1 && !full  && capture_en) begin
++        push_fifo    <= 1'b1;  // 1-cycle pulse
++        fifo_data_in <= transaction_table[push_idx].frame;
++        // Mark that entry as free
++        transaction_table[push_idx].free_slot <= 1'b0;
++      end
++    end
++  end
++
++// ---------------------------------------------------------------------------
++// FIFO pop logic w/ DPI drain:
++//   priority
++//     1) DPI drain 
++//     2) initial_pop (if clock gating)
++//     3) ack SW (FRAME_READ rising)
++// ---------------------------------------------------------------------------
++
++  // Sample the negedge of the run_enable of the clock gating, to do the first pop
++  logic run_enable_q;
++  wire initial_pop = run_enable_q & ~run_enable;
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      run_enable_q <= 1'b1;
++    end else begin
++      run_enable_q <= run_enable;  // sample last cycle’s run_enable
++    end
++  end
++
++
++  // always_ff @(posedge clk_i or negedge rst_ni) begin
++  //   if (!rst_ni) begin
++  //     pop_fifo <= 1'b0;
++  //   end else begin
++  //     pop_fifo <= 1'b0;  // default: no pop
++
++  //     // 1) FIFO just became full → generate first pop
++  //     // if (/*halt_pulse*/!run_enable) begin
++  //     //   pop_fifo <= 1'b1;
++
++  //     if (  /*halt_pulse*/ initial_pop  /**/) begin
++  //       pop_fifo <= 1'b1;
++
++  //       // 2) SW read-ack while frames remain
++  //     end else if (frame_read_sw && !empty) begin
++  //       pop_fifo <= 1'b1;
++  //     end
++  //   end
++  // end
++
++
++always_ff @(posedge clk_i or negedge rst_ni) begin
++  if (!rst_ni) begin
++    pop_fifo                 <= 1'b0;
++    frame_read_autoclr_pulse <= 1'b0;
++  end else begin
++    pop_fifo                 <= 1'b0;
++    frame_read_autoclr_pulse <= 1'b0;
++
++    // (1) Drain DPI: push to consumer C, then pop if pushed succesfully
++    /* verilator lint_off SYNCASYNCNET */
++    if (DPI_ENABLE /*&& !debug_mode_i*/ && !empty) begin
++      int pushed;
++      pushed = sniffer_dpi_push(
++        DPI_STREAM_ID, 4,
++        fifo_data_out[127:96], // MSW  (== sni_data0)
++        fifo_data_out[95:64],
++        fifo_data_out[63:32],
++        fifo_data_out[31:0]    // LSW  (== sni_data3)
++      );
++      /* verilator lint_off WIDTH */
++      if (pushed) begin
++        pop_fifo <= 1'b1;  // consuma l'elemento che abbiamo appena inviato
++      end
++
++    end else if (initial_pop && !empty) begin
++      pop_fifo <= 1'b1;
++
++    // SW ack rising edge -> pop exactly one and auto-clear FRAME_READ
++    end else if (frame_read_rise && !empty) begin
++      pop_fifo                 <= 1'b1;
++      frame_read_autoclr_pulse <= 1'b1;
++    end
++  end
++end
++
++  // ---------------------------------------------------------------------------
++  // FIFO-full edge detector
++  // ---------------------------------------------------------------------------
++  logic full_q;  // full flag one cycle ago
++  logic halt_pulse;  // 1-clk pulse that replaces former halt_state
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      full_q <= 1'b0;
++    end else begin
++      full_q <= full;  // remember previous level
++    end
++  end
++
++  assign halt_pulse = (full & ~full_q) && run_enable;  // rising edge of "full"
++  // assign halt_state_o = halt_pulse;    // this now goes to debug_req
++
++
++  // ---------------------------------------------------------------------------
++  // Debug req
++  // ---------------------------------------------------------------------------
++  logic debug_req_trigger;
++  logic [2:0] debug_req_counter;  // Counter per mantenere il segnale
++
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      debug_req_counter <= 3'b0;
++      debug_req_trigger <= 1'b0;
++    end else begin
++      if ((full && halt_pulse) && debug_req_counter == 3'b0) begin
++        // Inizia la sequenza di debug request
++        debug_req_counter <= 3'b1;
++        debug_req_trigger <= 1'b1;
++      end else if (debug_req_counter > 3'b0 && debug_req_counter < 3'b110) begin
++        // Mantieni alto per alcuni cicli (almeno 1, meglio 3-4)
++        debug_req_counter <= debug_req_counter + 1'b1;
++        debug_req_trigger <= 1'b1;
++      end else begin
++        debug_req_trigger <= 1'b0;
++        if (debug_req_counter == 3'b110) debug_req_counter <= 3'b0;  // Reset per prossimo trigger
++      end
++    end
++  end
++
++  // Collegamento al segnale debug_req del core
++  assign halt_state_o = debug_req_trigger;
++
++
++  // ------------------------------------------------------------------
++  // Software‐enable bit from control register
++  // ------------------------------------------------------------------
++
++  logic gated_active;
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) gated_active <= 1'b0;
++    else if (enable_gating_reg) gated_active <= 1'b1;
++    else gated_active <= 1'b0;
++  end
++
++
++  // ------------------------------------------------------------------
++  // Countdown then gate core clock
++  // ------------------------------------------------------------------
++  parameter int HALT_REQ_CYCLES = 15;
++  logic [$clog2(HALT_REQ_CYCLES+1)-1:0] halt_req_cnt;
++  logic run_enable;
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      halt_req_cnt <= 0;
++      run_enable   <= 1;
++    end else if (!gated_active) begin
++      // before gating is enabled, always leave CPU running
++      halt_req_cnt <= 0;
++      run_enable   <= 1;
++    end else if (halt_pulse) begin
++      // we detected FIFO-full → give the CPU N more cycles, then stop
++      /* verilator lint_off WIDTH */
++      halt_req_cnt <= HALT_REQ_CYCLES;
++      run_enable   <= 1;
++    end else if (halt_req_cnt != 0) begin
++      // counting down
++      halt_req_cnt <= halt_req_cnt - 1;
++      if (halt_req_cnt == 1) run_enable <= 0;
++    end else if (empty) begin
++      // once FIFO is empty, immediately re-open clock
++      run_enable <= 1;
++    end
++    // otherwise hold the previous run_enable
++  end
++
++  assign clk_gate_o = run_enable;
++
++
++  always_ff @(posedge clk_i or negedge rst_ni) begin
++    if (!rst_ni) begin
++      sni_data0 <= 32'd0;
++      sni_data1 <= 32'd0;
++      sni_data2 <= 32'd0;
++      sni_data3 <= 32'd0;
++    end else if (rst_fifo) begin
++      sni_data0 <= 32'd0;
++      sni_data1 <= 32'd0;
++      sni_data2 <= 32'd0;
++      sni_data3 <= 32'd0;
++    end else if (pop_fifo) begin
++      sni_data0 <= fifo_data_out[127:96];
++      sni_data1 <= fifo_data_out[95:64];
++      sni_data2 <= fifo_data_out[63:32];
++      sni_data3 <= fifo_data_out[31:0];
++    end
++  end
++
++
++
++  bus_sniffer_reg_top #(
++      .reg_req_t(reg_req_t),
++      .reg_rsp_t(reg_rsp_t),
++  ) bus_sniffer_reg_top_i (
++      .clk_i,
++      .rst_ni,
++      .reg_req_i,
++      .reg_rsp_o,
++      .reg2hw,
++      .hw2reg,
++      .devmode_i(1'b1)
++  );
++
++endmodule
+diff --git a/hw/ip/bus_sniffer/rtl/bus_sniffer_pkg.sv b/hw/ip/bus_sniffer/rtl/bus_sniffer_pkg.sv
+new file mode 100644
+index 0000000..a0c515b
+--- /dev/null
++++ b/hw/ip/bus_sniffer/rtl/bus_sniffer_pkg.sv
+@@ -0,0 +1,95 @@
++package bus_sniffer_pkg;
++
++  import core_v_mini_mcu_pkg::*;  // NUM_BANKS
++  import obi_pkg::*;  // For obi_req_t, obi_resp_t definitions
++
++  // -----------------------------------------------------------------------------
++  // This structure bundles all bus signals from the core_v_mini_mcu
++  // -----------------------------------------------------------------------------
++
++  typedef struct packed {
++    // Core-related signals
++    obi_req_t  core_instr_req;
++    obi_resp_t core_instr_resp;
++    obi_req_t  core_data_req;
++    obi_resp_t core_data_resp;
++
++    // DMA-related signals (arrays size [0:0] are effectively single element)
++    obi_req_t  dma_read_req;
++    obi_resp_t dma_read_resp;
++    obi_req_t  dma_write_req;
++    obi_resp_t dma_write_resp;
++    obi_req_t  dma_addr_req;
++    obi_resp_t dma_addr_resp;
++
++    // Peripherals
++    obi_req_t  ao_peripheral_slave_req;
++    obi_resp_t ao_peripheral_slave_resp;
++    obi_req_t  peripheral_slave_req;
++    obi_resp_t peripheral_slave_resp;
++
++    // RAM signals
++    obi_req_t [core_v_mini_mcu_pkg::NUM_BANKS-1:0]  ram_slave_req;
++    obi_resp_t [core_v_mini_mcu_pkg::NUM_BANKS-1:0] ram_slave_resp;
++
++    // Memory Map SPI Region
++    obi_req_t  flash_mem_slave_req;
++    obi_resp_t flash_mem_slave_resp;
++  } bus_sniffer_bundle_t;
++
++  //--------------------------------------------------------------------------
++  //    128 bits
++  //--------------------------------------------------------------------------
++
++  typedef struct packed {
++    logic [3:0]  source_id;       // [127:124]
++    logic [31:0] req_timestamp;   // [123:108]
++    logic [15:0] resp_timestamp;  // [107:92]
++    logic [31:0] address;         // [91:60]
++    logic [31:0] data;            // [59:28]
++    logic [3:0]  byte_enable;     // [27:24]
++    logic        we;              // [23]
++    logic        valid;           // [22]
++    logic        gnt;             // [21]
++    logic [4:0]  reserved;        // [20:0]
++  } bus_sniffer_frame_t;
++
++
++
++  // The partial transaction table
++  typedef struct packed {
++    logic               free_slot;     // entry is in use
++    logic               waiting_resp;  // 1 if read & waiting for rvalid
++    logic [3:0]         channel_id;    // e.g. CORE_DATA, DMA_READ, etc.
++    bus_sniffer_frame_t frame;
++  } partial_entry_t;
++
++  typedef enum int {
++    CH_CORE_INSTR,
++    CH_CORE_DATA,
++    CH_AO_PERIPH,
++    CH_PERIPH,
++    CH_RAM0,
++    CH_RAM1,
++    CH_FLASH,
++    CH_DMA_READ,
++    CH_DMA_WRITE,
++    CH_DMA_ADDR
++  } channel_e;
++
++  //--------------------------------------------------------------------------
++  // Source IDs for each set of signals
++  //--------------------------------------------------------------------------
++  parameter logic [3:0] CORE_INSTR = 4'h01;
++  parameter logic [3:0] CORE_DATA = 4'h02;
++  parameter logic [3:0] AO_PERIPH = 4'h03;
++  parameter logic [3:0] PERIPH = 4'h04;
++  parameter logic [3:0] RAM0 = 4'h05;
++  parameter logic [3:0] RAM1 = 4'h06;
++  parameter logic [3:0] FLASH = 4'h07;
++  parameter logic [3:0] DMA_READ = 4'h08;
++  parameter logic [3:0] DMA_WRITE = 4'h09;
++  parameter logic [3:0] DMA_ADDR = 4'h0A;
++
++
++endpackage : bus_sniffer_pkg
+diff --git a/hw/ip/bus_sniffer/rtl/bus_sniffer_reg_pkg.sv b/hw/ip/bus_sniffer/rtl/bus_sniffer_reg_pkg.sv
+new file mode 100644
+index 0000000..3be2f93
+--- /dev/null
++++ b/hw/ip/bus_sniffer/rtl/bus_sniffer_reg_pkg.sv
+@@ -0,0 +1,150 @@
++// Copyright lowRISC contributors.
++// Licensed under the Apache License, Version 2.0, see LICENSE for details.
++// SPDX-License-Identifier: Apache-2.0
++//
++// Register Package auto-generated by `reggen` containing data structure
++
++package bus_sniffer_reg_pkg;
++
++  // Address widths within the block
++  parameter int BlockAw = 5;
++
++  ////////////////////////////
++  // Typedefs for registers //
++  ////////////////////////////
++
++  typedef struct packed {
++    struct packed {
++      logic        q;
++    } en;
++    struct packed {
++      logic        q;
++    } rst_fifo;
++    struct packed {
++      logic        q;
++    } frame_read;
++    struct packed {
++      logic        q;
++    } enable_gating;
++  } bus_sniffer_reg2hw_sni_ctrl_reg_t;
++
++  typedef struct packed {
++    struct packed {
++      logic        q;
++    } empty;
++    struct packed {
++      logic        q;
++    } full;
++    struct packed {
++      logic        q;
++    } frame_avail;
++  } bus_sniffer_reg2hw_sni_status_reg_t;
++
++  typedef struct packed {
++    logic [31:0] q;
++  } bus_sniffer_reg2hw_sni_data0_reg_t;
++
++  typedef struct packed {
++    logic [31:0] q;
++  } bus_sniffer_reg2hw_sni_data1_reg_t;
++
++  typedef struct packed {
++    logic [31:0] q;
++  } bus_sniffer_reg2hw_sni_data2_reg_t;
++
++  typedef struct packed {
++    logic [31:0] q;
++  } bus_sniffer_reg2hw_sni_data3_reg_t;
++
++  typedef struct packed {
++    struct packed {
++      logic        d;
++      logic        de;
++    } frame_read;
++  } bus_sniffer_hw2reg_sni_ctrl_reg_t;
++
++  typedef struct packed {
++    struct packed {
++      logic        d;
++      logic        de;
++    } empty;
++    struct packed {
++      logic        d;
++      logic        de;
++    } full;
++    struct packed {
++      logic        d;
++      logic        de;
++    } frame_avail;
++  } bus_sniffer_hw2reg_sni_status_reg_t;
++
++  typedef struct packed {
++    logic [31:0] d;
++    logic        de;
++  } bus_sniffer_hw2reg_sni_data0_reg_t;
++
++  typedef struct packed {
++    logic [31:0] d;
++    logic        de;
++  } bus_sniffer_hw2reg_sni_data1_reg_t;
++
++  typedef struct packed {
++    logic [31:0] d;
++    logic        de;
++  } bus_sniffer_hw2reg_sni_data2_reg_t;
++
++  typedef struct packed {
++    logic [31:0] d;
++    logic        de;
++  } bus_sniffer_hw2reg_sni_data3_reg_t;
++
++  // Register -> HW type
++  typedef struct packed {
++    bus_sniffer_reg2hw_sni_ctrl_reg_t sni_ctrl; // [134:131]
++    bus_sniffer_reg2hw_sni_status_reg_t sni_status; // [130:128]
++    bus_sniffer_reg2hw_sni_data0_reg_t sni_data0; // [127:96]
++    bus_sniffer_reg2hw_sni_data1_reg_t sni_data1; // [95:64]
++    bus_sniffer_reg2hw_sni_data2_reg_t sni_data2; // [63:32]
++    bus_sniffer_reg2hw_sni_data3_reg_t sni_data3; // [31:0]
++  } bus_sniffer_reg2hw_t;
++
++  // HW -> register type
++  typedef struct packed {
++    bus_sniffer_hw2reg_sni_ctrl_reg_t sni_ctrl; // [139:138]
++    bus_sniffer_hw2reg_sni_status_reg_t sni_status; // [137:132]
++    bus_sniffer_hw2reg_sni_data0_reg_t sni_data0; // [131:99]
++    bus_sniffer_hw2reg_sni_data1_reg_t sni_data1; // [98:66]
++    bus_sniffer_hw2reg_sni_data2_reg_t sni_data2; // [65:33]
++    bus_sniffer_hw2reg_sni_data3_reg_t sni_data3; // [32:0]
++  } bus_sniffer_hw2reg_t;
++
++  // Register offsets
++  parameter logic [BlockAw-1:0] BUS_SNIFFER_SNI_CTRL_OFFSET = 5'h 0;
++  parameter logic [BlockAw-1:0] BUS_SNIFFER_SNI_STATUS_OFFSET = 5'h 4;
++  parameter logic [BlockAw-1:0] BUS_SNIFFER_SNI_DATA0_OFFSET = 5'h 8;
++  parameter logic [BlockAw-1:0] BUS_SNIFFER_SNI_DATA1_OFFSET = 5'h c;
++  parameter logic [BlockAw-1:0] BUS_SNIFFER_SNI_DATA2_OFFSET = 5'h 10;
++  parameter logic [BlockAw-1:0] BUS_SNIFFER_SNI_DATA3_OFFSET = 5'h 14;
++
++  // Register index
++  typedef enum int {
++    BUS_SNIFFER_SNI_CTRL,
++    BUS_SNIFFER_SNI_STATUS,
++    BUS_SNIFFER_SNI_DATA0,
++    BUS_SNIFFER_SNI_DATA1,
++    BUS_SNIFFER_SNI_DATA2,
++    BUS_SNIFFER_SNI_DATA3
++  } bus_sniffer_id_e;
++
++  // Register width information to check illegal writes
++  parameter logic [3:0] BUS_SNIFFER_PERMIT [6] = '{
++    4'b 0001, // index[0] BUS_SNIFFER_SNI_CTRL
++    4'b 0001, // index[1] BUS_SNIFFER_SNI_STATUS
++    4'b 1111, // index[2] BUS_SNIFFER_SNI_DATA0
++    4'b 1111, // index[3] BUS_SNIFFER_SNI_DATA1
++    4'b 1111, // index[4] BUS_SNIFFER_SNI_DATA2
++    4'b 1111  // index[5] BUS_SNIFFER_SNI_DATA3
++  };
++
++endpackage
++
+diff --git a/hw/ip/bus_sniffer/rtl/bus_sniffer_reg_top.sv b/hw/ip/bus_sniffer/rtl/bus_sniffer_reg_top.sv
+new file mode 100644
+index 0000000..f52102a
+--- /dev/null
++++ b/hw/ip/bus_sniffer/rtl/bus_sniffer_reg_top.sv
+@@ -0,0 +1,522 @@
++// Copyright lowRISC contributors.
++// Licensed under the Apache License, Version 2.0, see LICENSE for details.
++// SPDX-License-Identifier: Apache-2.0
++//
++// Register Top module auto-generated by `reggen`
++
++
++`include "common_cells/assertions.svh"
++
++module bus_sniffer_reg_top #(
++  parameter type reg_req_t = logic,
++  parameter type reg_rsp_t = logic,
++  parameter int AW = 5
++) (
++  input logic clk_i,
++  input logic rst_ni,
++  input  reg_req_t reg_req_i,
++  output reg_rsp_t reg_rsp_o,
++  // To HW
++  output bus_sniffer_reg_pkg::bus_sniffer_reg2hw_t reg2hw, // Write
++  input  bus_sniffer_reg_pkg::bus_sniffer_hw2reg_t hw2reg, // Read
++
++
++  // Config
++  input devmode_i // If 1, explicit error return for unmapped register access
++);
++
++  import bus_sniffer_reg_pkg::* ;
++
++  localparam int DW = 32;
++  localparam int DBW = DW/8;                    // Byte Width
++
++  // register signals
++  logic           reg_we;
++  logic           reg_re;
++  logic [AW-1:0]  reg_addr;
++  logic [DW-1:0]  reg_wdata;
++  logic [DBW-1:0] reg_be;
++  logic [DW-1:0]  reg_rdata;
++  logic           reg_error;
++
++  logic          addrmiss, wr_err;
++
++  logic [DW-1:0] reg_rdata_next;
++
++  // Below register interface can be changed
++  reg_req_t  reg_intf_req;
++  reg_rsp_t  reg_intf_rsp;
++
++
++  assign reg_intf_req = reg_req_i;
++  assign reg_rsp_o = reg_intf_rsp;
++
++
++  assign reg_we = reg_intf_req.valid & reg_intf_req.write;
++  assign reg_re = reg_intf_req.valid & ~reg_intf_req.write;
++/* verilator lint_off WIDTH */
++  assign reg_addr = reg_intf_req.addr;
++  assign reg_wdata = reg_intf_req.wdata;
++  assign reg_be = reg_intf_req.wstrb;
++  assign reg_intf_rsp.rdata = reg_rdata;
++  assign reg_intf_rsp.error = reg_error;
++  assign reg_intf_rsp.ready = 1'b1;
++
++  assign reg_rdata = reg_rdata_next ;
++  assign reg_error = (devmode_i & addrmiss) | wr_err;
++
++
++  // Define SW related signals
++  // Format: <reg>_<field>_{wd|we|qs}
++  //        or <reg>_{wd|we|qs} if field == 1 or 0
++  logic sni_ctrl_en_qs;
++  logic sni_ctrl_en_wd;
++  logic sni_ctrl_en_we;
++  logic sni_ctrl_rst_fifo_qs;
++  logic sni_ctrl_rst_fifo_wd;
++  logic sni_ctrl_rst_fifo_we;
++  logic sni_ctrl_frame_read_qs;
++  logic sni_ctrl_frame_read_wd;
++  logic sni_ctrl_frame_read_we;
++  logic sni_ctrl_enable_gating_qs;
++  logic sni_ctrl_enable_gating_wd;
++  logic sni_ctrl_enable_gating_we;
++  logic sni_status_empty_qs;
++  logic sni_status_full_qs;
++  logic sni_status_frame_avail_qs;
++  logic [31:0] sni_data0_qs;
++  logic [31:0] sni_data1_qs;
++  logic [31:0] sni_data2_qs;
++  logic [31:0] sni_data3_qs;
++
++  // Register instances
++  // R[sni_ctrl]: V(False)
++
++  //   F[en]: 0:0
++  prim_subreg #(
++    .DW      (1),
++    .SWACCESS("RW"),
++    .RESVAL  (1'h0)
++  ) u_sni_ctrl_en (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    // from register interface
++    .we     (sni_ctrl_en_we),
++    .wd     (sni_ctrl_en_wd),
++
++    // from internal hardware
++    .de     (1'b0),
++    .d      ('0  ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_ctrl.en.q ),
++
++    // to register interface (read)
++    .qs     (sni_ctrl_en_qs)
++  );
++
++
++  //   F[rst_fifo]: 1:1
++  prim_subreg #(
++    .DW      (1),
++    .SWACCESS("RW"),
++    .RESVAL  (1'h0)
++  ) u_sni_ctrl_rst_fifo (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    // from register interface
++    .we     (sni_ctrl_rst_fifo_we),
++    .wd     (sni_ctrl_rst_fifo_wd),
++
++    // from internal hardware
++    .de     (1'b0),
++    .d      ('0  ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_ctrl.rst_fifo.q ),
++
++    // to register interface (read)
++    .qs     (sni_ctrl_rst_fifo_qs)
++  );
++
++
++  //   F[frame_read]: 2:2
++  prim_subreg #(
++    .DW      (1),
++    .SWACCESS("RW"),
++    .RESVAL  (1'h0)
++  ) u_sni_ctrl_frame_read (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    // from register interface
++    .we     (sni_ctrl_frame_read_we),
++    .wd     (sni_ctrl_frame_read_wd),
++
++    // from internal hardware
++    .de     (hw2reg.sni_ctrl.frame_read.de),
++    .d      (hw2reg.sni_ctrl.frame_read.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_ctrl.frame_read.q ),
++
++    // to register interface (read)
++    .qs     (sni_ctrl_frame_read_qs)
++  );
++
++
++  //   F[enable_gating]: 3:3
++  prim_subreg #(
++    .DW      (1),
++    .SWACCESS("RW"),
++    .RESVAL  (1'h0)
++  ) u_sni_ctrl_enable_gating (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    // from register interface
++    .we     (sni_ctrl_enable_gating_we),
++    .wd     (sni_ctrl_enable_gating_wd),
++
++    // from internal hardware
++    .de     (1'b0),
++    .d      ('0  ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_ctrl.enable_gating.q ),
++
++    // to register interface (read)
++    .qs     (sni_ctrl_enable_gating_qs)
++  );
++
++
++  // R[sni_status]: V(False)
++
++  //   F[empty]: 0:0
++  prim_subreg #(
++    .DW      (1),
++    .SWACCESS("RO"),
++    .RESVAL  (1'h0)
++  ) u_sni_status_empty (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    .we     (1'b0),
++    .wd     ('0  ),
++
++    // from internal hardware
++    .de     (hw2reg.sni_status.empty.de),
++    .d      (hw2reg.sni_status.empty.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_status.empty.q ),
++
++    // to register interface (read)
++    .qs     (sni_status_empty_qs)
++  );
++
++
++  //   F[full]: 1:1
++  prim_subreg #(
++    .DW      (1),
++    .SWACCESS("RO"),
++    .RESVAL  (1'h0)
++  ) u_sni_status_full (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    .we     (1'b0),
++    .wd     ('0  ),
++
++    // from internal hardware
++    .de     (hw2reg.sni_status.full.de),
++    .d      (hw2reg.sni_status.full.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_status.full.q ),
++
++    // to register interface (read)
++    .qs     (sni_status_full_qs)
++  );
++
++
++  //   F[frame_avail]: 2:2
++  prim_subreg #(
++    .DW      (1),
++    .SWACCESS("RO"),
++    .RESVAL  (1'h0)
++  ) u_sni_status_frame_avail (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    .we     (1'b0),
++    .wd     ('0  ),
++
++    // from internal hardware
++    .de     (hw2reg.sni_status.frame_avail.de),
++    .d      (hw2reg.sni_status.frame_avail.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_status.frame_avail.q ),
++
++    // to register interface (read)
++    .qs     (sni_status_frame_avail_qs)
++  );
++
++
++  // R[sni_data0]: V(False)
++
++  prim_subreg #(
++    .DW      (32),
++    .SWACCESS("RO"),
++    .RESVAL  (32'h0)
++  ) u_sni_data0 (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    .we     (1'b0),
++    .wd     ('0  ),
++
++    // from internal hardware
++    .de     (hw2reg.sni_data0.de),
++    .d      (hw2reg.sni_data0.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_data0.q ),
++
++    // to register interface (read)
++    .qs     (sni_data0_qs)
++  );
++
++
++  // R[sni_data1]: V(False)
++
++  prim_subreg #(
++    .DW      (32),
++    .SWACCESS("RO"),
++    .RESVAL  (32'h0)
++  ) u_sni_data1 (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    .we     (1'b0),
++    .wd     ('0  ),
++
++    // from internal hardware
++    .de     (hw2reg.sni_data1.de),
++    .d      (hw2reg.sni_data1.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_data1.q ),
++
++    // to register interface (read)
++    .qs     (sni_data1_qs)
++  );
++
++
++  // R[sni_data2]: V(False)
++
++  prim_subreg #(
++    .DW      (32),
++    .SWACCESS("RO"),
++    .RESVAL  (32'h0)
++  ) u_sni_data2 (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    .we     (1'b0),
++    .wd     ('0  ),
++
++    // from internal hardware
++    .de     (hw2reg.sni_data2.de),
++    .d      (hw2reg.sni_data2.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_data2.q ),
++
++    // to register interface (read)
++    .qs     (sni_data2_qs)
++  );
++
++
++  // R[sni_data3]: V(False)
++
++  prim_subreg #(
++    .DW      (32),
++    .SWACCESS("RO"),
++    .RESVAL  (32'h0)
++  ) u_sni_data3 (
++    .clk_i   (clk_i    ),
++    .rst_ni  (rst_ni  ),
++
++    .we     (1'b0),
++    .wd     ('0  ),
++
++    // from internal hardware
++    .de     (hw2reg.sni_data3.de),
++    .d      (hw2reg.sni_data3.d ),
++
++    // to internal hardware
++    .qe     (),
++    .q      (reg2hw.sni_data3.q ),
++
++    // to register interface (read)
++    .qs     (sni_data3_qs)
++  );
++
++
++
++
++  logic [5:0] addr_hit;
++  always_comb begin
++    addr_hit = '0;
++    addr_hit[0] = (reg_addr == BUS_SNIFFER_SNI_CTRL_OFFSET);
++    addr_hit[1] = (reg_addr == BUS_SNIFFER_SNI_STATUS_OFFSET);
++    addr_hit[2] = (reg_addr == BUS_SNIFFER_SNI_DATA0_OFFSET);
++    addr_hit[3] = (reg_addr == BUS_SNIFFER_SNI_DATA1_OFFSET);
++    addr_hit[4] = (reg_addr == BUS_SNIFFER_SNI_DATA2_OFFSET);
++    addr_hit[5] = (reg_addr == BUS_SNIFFER_SNI_DATA3_OFFSET);
++  end
++
++  assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
++
++  // Check sub-word write is permitted
++  always_comb begin
++    wr_err = (reg_we &
++              ((addr_hit[0] & (|(BUS_SNIFFER_PERMIT[0] & ~reg_be))) |
++               (addr_hit[1] & (|(BUS_SNIFFER_PERMIT[1] & ~reg_be))) |
++               (addr_hit[2] & (|(BUS_SNIFFER_PERMIT[2] & ~reg_be))) |
++               (addr_hit[3] & (|(BUS_SNIFFER_PERMIT[3] & ~reg_be))) |
++               (addr_hit[4] & (|(BUS_SNIFFER_PERMIT[4] & ~reg_be))) |
++               (addr_hit[5] & (|(BUS_SNIFFER_PERMIT[5] & ~reg_be)))));
++  end
++
++  assign sni_ctrl_en_we = addr_hit[0] & reg_we & !reg_error;
++  assign sni_ctrl_en_wd = reg_wdata[0];
++
++  assign sni_ctrl_rst_fifo_we = addr_hit[0] & reg_we & !reg_error;
++  assign sni_ctrl_rst_fifo_wd = reg_wdata[1];
++
++  assign sni_ctrl_frame_read_we = addr_hit[0] & reg_we & !reg_error;
++  assign sni_ctrl_frame_read_wd = reg_wdata[2];
++
++  assign sni_ctrl_enable_gating_we = addr_hit[0] & reg_we & !reg_error;
++  assign sni_ctrl_enable_gating_wd = reg_wdata[3];
++
++  // Read data return
++  always_comb begin
++    reg_rdata_next = '0;
++    unique case (1'b1)
++      addr_hit[0]: begin
++        reg_rdata_next[0] = sni_ctrl_en_qs;
++        reg_rdata_next[1] = sni_ctrl_rst_fifo_qs;
++        reg_rdata_next[2] = sni_ctrl_frame_read_qs;
++        reg_rdata_next[3] = sni_ctrl_enable_gating_qs;
++      end
++
++      addr_hit[1]: begin
++        reg_rdata_next[0] = sni_status_empty_qs;
++        reg_rdata_next[1] = sni_status_full_qs;
++        reg_rdata_next[2] = sni_status_frame_avail_qs;
++      end
++
++      addr_hit[2]: begin
++        reg_rdata_next[31:0] = sni_data0_qs;
++      end
++
++      addr_hit[3]: begin
++        reg_rdata_next[31:0] = sni_data1_qs;
++      end
++
++      addr_hit[4]: begin
++        reg_rdata_next[31:0] = sni_data2_qs;
++      end
++
++      addr_hit[5]: begin
++        reg_rdata_next[31:0] = sni_data3_qs;
++      end
++
++      default: begin
++        reg_rdata_next = '1;
++      end
++    endcase
++  end
++
++  // Unused signal tieoff
++
++  // wdata / byte enable are not always fully used
++  // add a blanket unused statement to handle lint waivers
++  logic unused_wdata;
++  logic unused_be;
++  assign unused_wdata = ^reg_wdata;
++  assign unused_be = ^reg_be;
++
++  // Assertions for Register Interface
++  `ASSERT(en2addrHit, (reg_we || reg_re) |-> $onehot0(addr_hit))
++
++endmodule
++
++/* verilator lint_off DECLFILENAME */
++module bus_sniffer_reg_top_intf
++#(
++  parameter int AW = 5,
++  localparam int DW = 32
++) (
++  input logic clk_i,
++  input logic rst_ni,
++  REG_BUS.in  regbus_slave,
++  // To HW
++  output bus_sniffer_reg_pkg::bus_sniffer_reg2hw_t reg2hw, // Write
++  input  bus_sniffer_reg_pkg::bus_sniffer_hw2reg_t hw2reg, // Read
++  // Config
++  input devmode_i // If 1, explicit error return for unmapped register access
++);
++ localparam int unsigned STRB_WIDTH = DW/8;
++
++`include "register_interface/typedef.svh"
++`include "register_interface/assign.svh"
++
++  // Define structs for reg_bus
++  typedef logic [AW-1:0] addr_t;
++  typedef logic [DW-1:0] data_t;
++  typedef logic [STRB_WIDTH-1:0] strb_t;
++  `REG_BUS_TYPEDEF_ALL(reg_bus, addr_t, data_t, strb_t)
++
++  reg_bus_req_t s_reg_req;
++  reg_bus_rsp_t s_reg_rsp;
++  
++  // Assign SV interface to structs
++  `REG_BUS_ASSIGN_TO_REQ(s_reg_req, regbus_slave)
++  `REG_BUS_ASSIGN_FROM_RSP(regbus_slave, s_reg_rsp)
++
++  
++
++  bus_sniffer_reg_top #(
++    .reg_req_t(reg_bus_req_t),
++    .reg_rsp_t(reg_bus_rsp_t),
++    .AW(AW)
++  ) i_regs (
++    .clk_i,
++    .rst_ni,
++    .reg_req_i(s_reg_req),
++    .reg_rsp_o(s_reg_rsp),
++    .reg2hw, // Write
++    .hw2reg, // Read
++    .devmode_i
++  );
++  
++endmodule
++
++
+diff --git a/hw/ip/bus_sniffer/rtl/fifo_bus_sniffer.sv b/hw/ip/bus_sniffer/rtl/fifo_bus_sniffer.sv
+new file mode 100644
+index 0000000..39e951a
+--- /dev/null
++++ b/hw/ip/bus_sniffer/rtl/fifo_bus_sniffer.sv
+@@ -0,0 +1,96 @@
++//------------------------------------------------------------------------------
++// Module: optimized_fifo
++// Description: Parameterized synchronous FIFO for 128-bit words optimized for 
++//              Vivado on a Pynq-Z2 FPGA. This design uses inferred block RAM.
++//------------------------------------------------------------------------------
++module fifo_bus_sniffer #(
++    parameter int DATA_WIDTH = 128,           // Width of each FIFO word
++    parameter int DEPTH      = 32,            // FIFO depth (number of entries)
++    parameter int ADDR_WIDTH = $clog2(DEPTH)
++) (
++    input  logic                  clk,
++    input  logic                  rst_ni,    // synchronous reset
++    input  logic                  wr_en,     // push enable
++    input  logic                  rd_en,     // pop enable
++    input  logic [DATA_WIDTH-1:0] data_in,   // write data
++    output logic [DATA_WIDTH-1:0] data_out,  // read data
++    output logic                  full,      // FIFO full flag
++    output logic                  empty,     // FIFO empty flag
++    output logic [  ADDR_WIDTH:0] count      // Number of words stored
++);
++
++  //-------------------------------------------------------------------------
++  // Memory Array:
++  // Use the ram_style attribute for synthesis to force block RAM inference.
++  // For simulation with Verilator you can disable it if needed.
++  //-------------------------------------------------------------------------
++  // `ifdef SYNTHESIS
++
++  // `endif
++  (* ram_style = "block" *) logic [DATA_WIDTH-1:0] mem[0:DEPTH-1];
++
++  //-------------------------------------------------------------------------
++  // FIFO pointers and counter.
++  //-------------------------------------------------------------------------
++  logic [ADDR_WIDTH-1:0] wr_ptr, rd_ptr;
++  // We use an extra bit for the counter to represent the range [0, DEPTH].
++  logic [ADDR_WIDTH:0] count_reg;
++  int count_int;
++  int i;
++
++  //-------------------------------------------------------------------------
++  // Status signals.
++  //-------------------------------------------------------------------------
++  assign full = (count_int == DEPTH);
++  assign empty = (count_int == 0);
++  assign count = count_reg;
++  assign data_out = mem[rd_ptr];
++  //-------------------------------------------------------------------------
++  // FIFO operation:
++  // Synchronous FIFO that handles push, pop, and simultaneous operations.
++  //-------------------------------------------------------------------------
++  always_ff @(posedge clk or negedge rst_ni) begin
++    if (!rst_ni) begin
++      wr_ptr    <= '0;
++      rd_ptr    <= '0;
++      count_reg <= '0;
++      count_int <= 0;
++      /* verilator lint_off BLKSEQ */
++      for (i = 0; i < DEPTH; i++) begin
++        mem[i] = '0;
++      end
++
++    end else begin
++      case ({
++        (wr_en && !full), (rd_en && !empty)
++      })
++        2'b10: begin
++          // Write only.
++          mem[wr_ptr] <= data_in;
++          wr_ptr      <= wr_ptr + 1;
++          count_reg   <= count_reg + 1;
++          count_int   <= count_int + 1;
++
++        end
++        2'b01: begin
++          // Read only.
++          rd_ptr    <= rd_ptr + 1;
++          count_reg <= count_reg - 1;
++          count_int <= count_int - 1;
++
++        end
++        2'b11: begin
++          // Simultaneous push and pop.
++          mem[wr_ptr] <= data_in;
++          wr_ptr      <= wr_ptr + 1;
++          rd_ptr      <= rd_ptr + 1;
++          // count_reg remains unchanged.
++        end
++        default: begin
++          // No operation.
++        end
++      endcase
++    end
++  end
++
++endmodule
+diff --git a/hw/vendor/openhwgroup_cv32e20/rtl/cve2_core.sv b/hw/vendor/openhwgroup_cv32e20/rtl/cve2_core.sv
+index 3eaefaf..93267e0 100644
+--- a/hw/vendor/openhwgroup_cv32e20/rtl/cve2_core.sv
++++ b/hw/vendor/openhwgroup_cv32e20/rtl/cve2_core.sv
+@@ -65,6 +65,7 @@ module cve2_core import cve2_pkg::*; #(
+   input  logic [31:0]                  dm_halt_addr_i,
+   input  logic [31:0]                  dm_exception_addr_i,
+   output crash_dump_t                  crash_dump_o,
++  output logic                         debug_mode_o, //should take this signal into account when filling the fifo
+   // SEC_CM: EXCEPTION.CTRL_FLOW.LOCAL_ESC
+   // SEC_CM: EXCEPTION.CTRL_FLOW.GLOBAL_ESC
+ 
+@@ -1345,4 +1346,7 @@ module cve2_core import cve2_pkg::*; #(
+   assign unused_instr_new_id = instr_new_id;
+ `endif
+ 
++
++  assign debug_mode_o = debug_mode;
++
+ endmodule
+diff --git a/hw/vendor/openhwgroup_cv32e20/rtl/cve2_top.sv b/hw/vendor/openhwgroup_cv32e20/rtl/cve2_top.sv
+index 615443e..a44b378 100644
+--- a/hw/vendor/openhwgroup_cv32e20/rtl/cve2_top.sv
++++ b/hw/vendor/openhwgroup_cv32e20/rtl/cve2_top.sv
+@@ -60,6 +60,7 @@ module cve2_top import cve2_pkg::*; #(
+   input  logic [31:0]                  dm_halt_addr_i,
+   input  logic [31:0]                  dm_exception_addr_i,
+   output crash_dump_t                  crash_dump_o,
++  output logic                         debug_mode_o, //should take this signal into account when filling the fifo
+ 
+   // RISC-V Formal Interface
+   // Does not comply with the coding standards of _i/_o suffixes, but follows
+@@ -197,6 +198,7 @@ module cve2_top import cve2_pkg::*; #(
+     .dm_halt_addr_i,
+     .dm_exception_addr_i,
+     .crash_dump_o,
++    .debug_mode_o,
+ 
+ `ifdef RVFI
+     .rvfi_valid,
+diff --git a/mcu_cfg.hjson b/mcu_cfg.hjson
+index 6ae77b5..de10f93 100644
+--- a/mcu_cfg.hjson
++++ b/mcu_cfg.hjson
+@@ -128,7 +128,13 @@
+             length:  0x00010000
+             is_included: "yes"
+             path:    "./hw/ip/i2s/data/i2s.hjson"
+-        }
++        },
++        bus_sniffer: {
++            offset:  0x00080000,
++            length:  0x00010000,
++            is_included: "yes",
++            path:    "./hw/ip/bus_sniffer/data/bus_sniffer.hjson"
++        },
+ 
+     }
+ 
+diff --git a/sw/applications/example_asm/main.c b/sw/applications/example_asm/main.c
+index 48ca9c9..50603e4 100644
+--- a/sw/applications/example_asm/main.c
++++ b/sw/applications/example_asm/main.c
+@@ -2,6 +2,9 @@
+ #include <stdlib.h>
+ #include "constants.h"
+ #include "x-heep.h"
++#include "mmio.h"
++#include "bus_sniffer_regs.h"
++
+ 
+ /* By default, printfs are activated for FPGA and disabled for simulation. */
+ #define PRINTF_IN_FPGA  1
+@@ -19,6 +22,54 @@ extern int add_asm_function(int a, int b);
+ extern int mul_by_const_asm_function( int a);
+ 
+ int main() {
++    // unsigned int BUS_SNIFFER_START_ADDRESS = 0x30080000;
++    // mmio_region_t bus_sniffer_base_addr = mmio_region_from_addr((uintptr_t)BUS_SNIFFER_START_ADDRESS);
++
++    // mmio_region_write32(bus_sniffer_base_addr, BUS_SNIFFER_SNI_CTRL_REG_OFFSET, 2);
++    // printf("Reset fifo");
++
++    // mmio_region_write32(bus_sniffer_base_addr, BUS_SNIFFER_SNI_CTRL_REG_OFFSET, 1);
++    // printf("Reset fifo");
++
++
++      /* some dummy C values to store */
++//   const uint32_t v0 = 39;
++//   const uint32_t v1 = 42;
++//   const uint32_t v2 = 123;
++
++//   /* Inline-asm block that does six stores and loads in a row */
++//   asm volatile (
++//     /* store v0 at [FIFO_BASE + 0] */
++//     "sw   %1, 0(%0)      \n"
++//     /* load it back into t0 */
++//     "lw   t0, 0(%0)      \n"
++
++//     /* store v1 at [FIFO_BASE + 4] */
++//     "sw   %2, 4(%0)      \n"
++//     /* load it back into t1 */
++//     "lw   t1, 4(%0)      \n"
++
++//     /* store v2 at [FIFO_BASE + 8] */
++//     "sw   %3, 8(%0)      \n"
++//     /* load it back into t2 */
++//     "lw   t2, 8(%0)      \n"
++//     :
++//     : "r"(BUS_SNIFFER_START_ADDRESS),  /* %0 = base address */
++//       "r"(v0),         /* %1 = first value */
++//       "r"(v1),         /* %2 = second value */
++//       "r"(v2)          /* %3 = third value */
++//     : "t0", "t1", "t2", "memory"
++//   );
++
++    // Define the base address of the bus_sniffer
++    uintptr_t BUS_SNIFFER_START_ADDRESS = 0x30080000;
++    mmio_region_t bus_sniffer = mmio_region_from_addr(BUS_SNIFFER_START_ADDRESS);
++
++    // Reset FIFO (optional, ensure FIFO is empty at start)
++    mmio_region_write32(bus_sniffer, BUS_SNIFFER_SNI_CTRL_REG_OFFSET, 0x2); // Reset
++    mmio_region_write32(bus_sniffer, BUS_SNIFFER_SNI_CTRL_REG_OFFSET, 0x1); // Enable
++
++
+     int num1 = 10;
+     int num2 = 20;
+     int sum = add_asm_function(num1, num2);
+@@ -26,6 +77,28 @@ int main() {
+ 
+     PRINTF("%d+%d=%d\n", num1, num2, sum);
+     PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
++
++
++    PRINTF("%d+%d=%d\n", num1, num2, sum);
++    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
++
++    
++    PRINTF("%d+%d=%d\n", num1, num2, sum);
++    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
++    PRINTF("%d+%d=%d\n", num1, num2, sum);
++    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
++
+     
++
++    // Check FIFO full status in a loop (or wherever appropriate)
++    // while (1) {
++    //     uint32_t status = mmio_region_read32(bus_sniffer, BUS_SNIFFER_SNI_STATUS_REG_OFFSET);
++    //     if (status & (1 << BUS_SNIFFER_SNI_STATUS_FULL_BIT)) {  // Assuming bit 0 = FIFO full flag (adjust as needed)
++    //         PRINTF("FIFO full! Triggering SIGTRAP.\n");
++    //         raise(5);  // Pause in GDB (SIGTRAP)
++    //         // break;           // Exit loop after trapping (optional)
++    //     }
++    // }
++    PRINTF("Sum is %d.\n", sum);
+     return (sum == num1+num2) && (mul == num2*MULTIPLY_CONSTANT) ? EXIT_SUCCESS : EXIT_FAILURE;   
+-}
+\ No newline at end of file
++}
+diff --git a/sw/device/lib/drivers/bus_sniffer/bus_sniffer_regs.h b/sw/device/lib/drivers/bus_sniffer/bus_sniffer_regs.h
+new file mode 100644
+index 0000000..6f836bd
+--- /dev/null
++++ b/sw/device/lib/drivers/bus_sniffer/bus_sniffer_regs.h
+@@ -0,0 +1,43 @@
++// Generated register defines for bus_sniffer
++
++#ifndef _BUS_SNIFFER_REG_DEFS_
++#define _BUS_SNIFFER_REG_DEFS_
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++// Register width
++#define BUS_SNIFFER_PARAM_REG_WIDTH 32
++
++// Control register: Bit0 enables the bus sniffer; Bit1 resets the FIFO; Bit2
++// if the frame is stored in sw
++#define BUS_SNIFFER_SNI_CTRL_REG_OFFSET 0x0
++#define BUS_SNIFFER_SNI_CTRL_EN_BIT 0
++#define BUS_SNIFFER_SNI_CTRL_RST_FIFO_BIT 1
++#define BUS_SNIFFER_SNI_CTRL_FRAME_READ_BIT 2
++#define BUS_SNIFFER_SNI_CTRL_ENABLE_GATING_BIT 3
++
++// Status register: Bit0 = EMPTY, Bit1 = FULL, Bit2 = FRAME_AVAIL., Bit3 =
++// FRAME_READ
++#define BUS_SNIFFER_SNI_STATUS_REG_OFFSET 0x4
++#define BUS_SNIFFER_SNI_STATUS_EMPTY_BIT 0
++#define BUS_SNIFFER_SNI_STATUS_FULL_BIT 1
++#define BUS_SNIFFER_SNI_STATUS_FRAME_AVAIL_BIT 2
++
++// Data register 0: Upper 32 bits of captured frame.
++#define BUS_SNIFFER_SNI_DATA0_REG_OFFSET 0x8
++
++// Data register 1: Next 32 bits of captured frame.
++#define BUS_SNIFFER_SNI_DATA1_REG_OFFSET 0xc
++
++// Data register 2: Next 32 bits of captured frame.
++#define BUS_SNIFFER_SNI_DATA2_REG_OFFSET 0x10
++
++// Data register 3: Lower 32 bits of captured frame.
++#define BUS_SNIFFER_SNI_DATA3_REG_OFFSET 0x14
++
++#ifdef __cplusplus
++}  // extern "C"
++#endif
++#endif  // _BUS_SNIFFER_REG_DEFS_
++// End generated register defines for bus_sniffer
+\ No newline at end of file
+diff --git a/test/verifheep/OpenOCD.py b/test/verifheep/OpenOCD.py
+new file mode 100644
+index 0000000..e85eedd
+--- /dev/null
++++ b/test/verifheep/OpenOCD.py
+@@ -0,0 +1,609 @@
++'''
++OpenOCD telnet-protocol python wrapper.
++
++Written by Artamonov Dmitry <screwer@gmail.com>
++
++This program is free software. It comes without any warranty, to the extent permitted by applicable law.
++You can redistribute it and/or modify it under the terms of the WTFPL, Version 2, as published by Sam Hocevar.
++See http://www.wtfpl.net/ for more details
++'''
++#-------------------------------------------------------------------------------------------------
++
++
++import telnetlib
++import re
++import struct
++
++#-------------------------------------------------------------------------------------------------
++
++def write_raw_sequence(tn, seq):
++    sock = tn.get_socket()
++    if sock is not None:
++        sock.send(seq)
++
++#-------------------------------------------------------------------------------------------------
++
++class OpenOCD:
++    def __init__(self, Host="localhost", Port=4444):
++        self.tn = telnetlib.Telnet(Host, Port)
++        #write_raw_sequence(self.tn, telnetlib.IAC + telnetlib.WILL + telnetlib.ECHO)
++        self.Readout()
++
++    #
++    # Communication functions
++    #
++    def Readout(self):
++        s = ''
++        Lines = []
++        while True:
++            s += self.tn.read_some().decode('utf-8')
++            l = s.splitlines()
++            if len(l) > 1:
++                for s in l[:-1]:
++                    if len(s) > 0:
++                        Lines.append(s)
++                s = l[-1]
++            if s == '> ':
++                return Lines
++
++    def Exec(self, Cmd, *args):
++        Text = Cmd
++        for arg in args:
++            if arg:
++                Text += ' ' + arg
++        Text += '\n'
++        self.tn.write(Text.encode('ascii') + b"\n")  # encode the string to bytes
++        return self.Readout()
++
++
++    #
++    # Static Helpers
++    #
++    @staticmethod
++    def ValueHex(n):
++        return "0x%x" % n if isinstance(n, (int)) else str(n)
++
++    @staticmethod
++    def ValueHex32(n):
++        return "0x%08x" % n if isinstance(n, (int)) else str(n)
++
++    @staticmethod
++    def ValueDec(n):
++        return "%d" % n if isinstance(n, (int)) else str(n)
++
++    @staticmethod
++    def ImageFormat(Bin, IHex, Elf, S19):
++        FOpt = int(Bin) + int(IHex) + int(Elf) + int(S19)
++        #if 0 == FOpt:
++        #    raise ValueError('Wrong format option (not specified)')
++
++        if FOpt > 1:
++            raise ValueError('Wrong format option (multiple specified)')
++
++        Opt = 'bin' if Bin else 'ihex' if IHex else 'elf' if Elf else 's19' if S19 else None
++        return Opt
++
++    @staticmethod
++    def ToRWA(Read, Write, Access):
++        return 0 if Read else 1 if Write else 2
++
++    @staticmethod
++    def FromRWA(Value):
++        return 'r' if 0 == Value else 'w' if 1 == Value else 'a'
++
++    @staticmethod
++    def HexView(Data, Addr, Prefix=''):
++        Size = len(Data)
++        n = -(Addr & 0x0F)
++        Addr = Addr & (~0x0F)
++        while n < Size:        
++            Bytes = ''
++            Text = ''
++
++            for i in range(0, 16):
++                Byte = None if n < 0 or n >= Size else ord(Data[n:n+1])
++                if Byte is not None:
++                    Bytes += '%02x' % Byte
++                    Text += chr(Byte) if Byte > 32 and Byte < 128 else '.'
++                else:
++                    Bytes += '  '
++                    Text += ' '
++            
++                if i == 7:
++                    Bytes += ' | '
++                    Text += ' '
++                else:
++                    Bytes += ' '
++                n += 1
++
++            Msg = '%s0x%08x %s%s' % (Prefix, Addr, Bytes, Text)
++            Addr += 0x10
++            print(Msg)
++
++    #
++    # Resume the target at its current code position, or the optional address if it is provided. OpenOCD will wait 5 seconds for the target to resume.
++    #
++    def Resume(self):
++        return self.Exec('resume')
++
++    #
++    # Single-step the target at its current code position, or the optional address if it is provided.
++    #
++    def Step(self, Addr=None):
++        AddrHex = None if Addr is None else OpenOCD.ValueHex(Addr)
++        return self.Exec('step', AddrHex)
++
++    #
++    # The halt command first sends a halt request to the target, wait up to MS milliseconds, for the target to halt (and enter debug mode).
++    # Using 0 as the MS parameter prevents OpenOCD from waiting.
++    #
++    def Halt(self, MS=100):
++        return self.Exec('halt', self.ValueDec(MS))
++
++
++    #
++    # Perform as hard a reset as possible, using SRST if possible. All defined targets will be reset, and target events will fire during the reset sequence.
++    #
++    # The optional parameter specifies what should happen after the reset. If there is no parameter, a reset run is executed. The other options will not work on all systems.
++    #   'Run'  - Let the target run
++    #   'Halt' - Immediately halt the target
++    #   'Init' - Immediately halt the target, and execute the reset-init script
++    #
++    def Reset(self, Run = False, Halt = False, Init = False):
++        if int(Run) + int(Halt) + int(Init) > 1:
++            raise ValueError('Wrong reset option (multiple specified)')
++
++        Opt = 'run' if Run else 'halt' if Halt else 'init' if Init else None
++        return self.Exec('reset', Opt)
++
++    #
++    # Requesting target halt and executing a soft reset. This is often used when a target cannot be reset and halted.
++    # The target, after reset is released begins to execute code.
++    # OpenOCD attempts to stop the CPU and then sets the program counter back to the reset vector.
++    # Unfortunately the code that was executed may have left the hardware in an unknown state.
++    #
++    def SoftResetHalt(self):
++        return self.Exec('soft_reset_halt')
++
++    #
++    # Registers handling
++    #
++    class RegOCD:
++        def __init__(self, OCD, Name, Force=False):
++            self.OCD = OCD
++            self.Name = str(Name)
++            self.Force = Force # not supported yet
++
++        #
++        # Read register value
++        #
++        def Read(self):
++            r = self.OCD.Exec('reg', self.Name)
++            if len(r) < 2:
++                return None
++
++            w = r[1].split()
++            if w[0] != self.Name:
++                return None
++            return int(w[2], 16)
++
++        #
++        # Write value to the register
++        #
++        def Write(self, Value):
++            if not self.Name:
++                raise ValueError('Cannot write to all registers')
++
++            r = self.OCD.Exec('reg', self.Name, OpenOCD.ValueHex(Value))
++            pass
++    
++    #
++    # Access a single register by number or by its name.
++    # The target must generally be halted before access to CPU core registers is allowed.
++    # Depending on the hardware, some other registers may be accessible while the target is running.
++    #
++    def Reg(self, Name):
++        return self.RegOCD(self, Name)
++
++    #
++    # Enum available registers (empty 'reg' command wrapper)
++    # Returns register array or by-name dictionary, depending on Dict parameter.
++    #
++    def Regs(self, Dict=False):
++
++        class RegInfo:
++            def __init__(self, Index, Name, Width):
++                self.Index = Index
++                self.Name = Name
++                self.Width = Width
++
++        All = {} if Dict else []
++        reReg = re.compile('\\((?P<index>\\d+)\\)\\s+(?P<name>\\w+)\\s+\\(/(?P<width>\\d+)\\)')
++        for s in self.Exec('reg'):
++            r = reReg.match(s)
++            if r:
++                Index = r.group('index')
++                Name  = r.group('name')
++                Width = int(r.group('width'))
++                Info = RegInfo(Index, Name, Width)
++                if Dict:
++                    All[Info.Name] = Info
++                else:
++                    All.append(Info)
++        return All
++
++    #
++    # Memory reading
++    #
++    def ReadMem_(self, Verb, Addr):
++        AddrHex = OpenOCD.ValueHex32(Addr)
++        r = self.Exec(Verb, AddrHex)
++        if len(r) < 2:
++            return None
++    
++        w = r[1].split()
++        if w[0] != AddrHex + ':':
++            return None
++        return int(w[1], 16)
++
++    def ReadMem32(self, Addr):
++        return self.ReadMem_('mdw', Addr)
++
++    def ReadMem16(self, Addr):
++        return self.ReadMem_('mdh', Addr)
++    
++    def ReadMem8(self, Addr):
++        return self.ReadMem_('mdb', Addr)
++
++    def ReadMem(self, Addr, Size):
++        Data = ''
++        while 0 != Size:
++            BlockSize = min(4, Size)
++            if 0 != (Addr & 1):
++                BlockSize = 1
++            elif 0 != (Addr & 2):
++                BlockSize = min(2, Size)
++
++            if 4 == BlockSize:
++                Value = self.ReadMem32(Addr)
++                Data += struct.pack('<L', Value)
++            elif 2 == BlockSize:
++                Value = self.ReadMem16(Addr)
++                Data += struct.pack('<H', Value)
++            else:
++                Value = self.ReadMem8(Addr)
++                Data += struct.pack('<B', Value)
++            Addr += BlockSize
++            Size -= BlockSize
++        return Data
++
++    #
++    # Memory writing
++    #
++    def WriteMem_(self, Verb, Addr, Value):
++        AddrHex = OpenOCD.ValueHex(Addr)
++        ValueHex = OpenOCD.ValueHex(Value)
++        r = self.Exec(Verb, AddrHex, ValueHex)
++
++    def WriteMem32(self, Addr, Value):
++        self.WriteMem_('mww', Addr, Value)
++
++    def WriteMem16(self, Addr, Value):
++        self.WriteMem_('mwh', Addr, Value)
++
++    def WriteMem8(self, Addr, Value):
++        self.WriteMem_('mwb', Addr, Value)
++
++    def WriteMem(self, Addr, Data):
++        Offset = 0
++        Size = len(Data)
++        while Offset < Size:
++            Remainder = (Size - Offset)
++            BlockSize = min(4, Remainder)
++            if 0 != (Addr & 1):
++                BlockSize = 1
++            elif 0 != (Addr & 2):
++                BlockSize = min(2, Remainder)
++
++            if 4 == BlockSize:
++                Value, = struct.unpack_from('<L', Data, Offset)
++                self.WriteMem32(Addr, Value)
++            elif 2 == BlockSize:
++                Value, = struct.unpack_from('<H', Data, Offset)
++                self.WriteMem16(Addr, Value)
++            else:
++                Value, = struct.unpack_from('<B', Data, Offset)
++                self.WriteMem8(Addr, Value)
++            Addr += BlockSize
++            Offset += BlockSize
++
++    #
++    # Breakpoints
++    #
++    class BpOCD:
++        def __init__(self, OCD, Addr, Len, HW=False):
++            self.OCD = OCD
++            self.Addr = Addr
++            self.Len = Len
++            self.HW = HW
++            self.Enabled = False
++        
++        def Enable(self):
++            AddrHex = OpenOCD.ValueHex(self.Addr)
++            LenDec = OpenOCD.ValueDec(self.Len)
++            r = self.OCD.Exec('bp', AddrHex, LenDec, 'hw' if self.HW else None)
++            self.Enabled = True # TODO: check Exec result
++            return r
++
++        def Disable(self):
++            AddrHex = OpenOCD.ValueHex(self.Addr)
++            r = self.OCD.Exec('rbp', AddrHex)
++            self.Enabled = False # TODO: check Exec result
++            return r
++
++    def BP(self, Addr, Len=2, HW=True, Enable=False):
++        bp = self.BpOCD(self, Addr, Len, HW)
++        if Enable:
++            bp.Enable()
++        return bp
++    
++    def BPs(self):
++        All = []
++        reBP = re.compile('Breakpoint.*: 0x(?P<addr>[0-9a-fA-F]+), 0x(?P<size>[0-9a-fA-F]+).*')
++        for s in self.Exec('bp'):
++            r = reBP.match(s)
++            if r:
++                Addr = int(r.group('addr'), 16)
++                Size = int(r.group('size'), 16)
++                bp = self.BpOCD(self, Addr, Size)
++                All.append(bp)
++        return All
++
++    def RemoveBPs(self):
++        for bp in self.BPs():
++            bp.Disable()
++
++    #
++    # Watchpoints
++    #
++    class WpOCD:
++        def __init__(self, OCD, Addr, Len, RWA=None, Value=None, Mask=None):
++            self.OCD = OCD
++            self.Addr = Addr
++            self.Len = Len
++            self.RWA = RWA
++            self.Value = Value
++            self.Mask = Mask if Mask is not None else 0xffffffff if Value is not None else None
++
++        def Enable(self):
++            AddrHex = OpenOCD.ValueHex(self.Addr)
++            LenDec  = OpenOCD.ValueDec(self.Len)
++            ValueHex = None if self.Value is None else OpenOCD.ValueHex(self.Value)
++            MaskHex  = None if self.Mask is None else OpenOCD.ValueHex(self.Mask)
++            r = self.OCD.Exec('wp', AddrHex, LenDec, OpenOCD.FromRWA(self.RWA), ValueHex, MaskHex)
++            if len(r) > 2:
++                raise ValueError(r[1])
++
++        def Disable(self):
++            AddrHex = OpenOCD.ValueHex(self.Addr)
++            return self.OCD.Exec('rwp', AddrHex)
++
++    def WP(self, Addr, Len=4, Read=None, Write=None, Access=None, Value=None, Mask=None, Enable=False):
++        RWA = OpenOCD.ToRWA(Read, Write, Access)
++        wp = self.WpOCD(self, Addr, Len, RWA, Value, Mask)
++        if Enable:
++            wp.Enable()
++        return wp
++
++    def WPs(self):
++        All = []
++        reWP = re.compile('address: 0x(?P<addr>[0-9a-fA-F]+), len: 0x(?P<len>[0-9a-fA-F]+), r/w/a: (?P<rwa>\\d), value: 0x(?P<value>[0-9a-fA-F]+), mask: 0x(?P<mask>[0-9a-fA-F]+)')
++        for s in self.Exec('wp'):
++            r = reWP.match(s)
++            if r:
++                Addr  = int(r.group('addr'), 16)
++                Len   = int(r.group('len'))
++                RWA   = int(r.group('rwa'))
++                Value = int(r.group('value'), 16)
++                Mask  = int(r.group('mask'), 16)
++
++                wp = self.WpOCD(self, Addr, Len, RWA, Value, Mask)
++                All.append(wp)
++        return All
++
++        return All
++
++    def RemoveWPs(self):
++        for wp in self.WPs():
++            wp.Disable()
++
++
++    #
++    # Image handling
++    #
++    class ImageOCD:
++        def __init__(self, OCD):
++            self.OCD = OCD
++        #
++        # Dump size bytes of target memory starting at address to the binary file named filename.
++        #
++        def Dump(self, Filename, Addr, Size):
++            FileNameQ = '"%s"' % Filename
++            AddrHex = OpenOCD.ValueHex(Addr)
++            SizeHex = OpenOCD.ValueHex(Size)
++            return self.OCD.Exec('dump_image', FileNameQ, AddrHex, SizeHex)
++
++        #
++        # If no parametes specified - Loads an image stored in memory by preceeded FastLoad to the current target.
++        # Otherwise storing the image in memory and uploading the image to the target can be a way to upload e.g. multiple debug sessions when the binary does not change. 
++        #
++        def FastLoad(self, Filename=None, Addr=None, Bin=False, IHex=False, Elf=False, S19=False):
++            if not Filename and not Addr:
++                return self.OCD.Exec('fast_load')
++
++            FileNameQ = '"%s"' % Filename
++            AddrHex = OpenOCD.ValueHex(Addr)
++            Format = OpenOCD.ImageFormat(Bin, IHex, Elf, S19)
++            return self.OCD.Exec('fast_load_image', FileNameQ, AddrHex, Format)
++
++        #
++        # Load image from file filename to target memory offset by address from its load address.
++        # The file format may optionally be specified (bin, ihex, elf, or s19).
++        #
++        # In addition the following arguments may be specifed:
++        #   MinAddr - ignore data below min_addr (this is w.r.t. to the target's load address + address)
++        #   MaxLength - maximum number of bytes to load.
++        #
++        def Load(self, Filename, Addr, Bin=False, IHex=False, Elf=False, S19=False, MinAddr=None, MaxLength=None):
++            FileNameQ = '"%s"' % Filename
++            AddrHex = OpenOCD.ValueHex(Addr)
++            Format = OpenOCD.ImageFormat(Bin, IHex, Elf, S19)
++            MinAddrHex = None if MinAddr is None else OpenOCD.ValueHex(MinAddr)
++            MaxLengthHex = None if MaxLength is None else OpenOCD.ValueHex(MaxLength)
++            return self.OCD.Exec('load_image', FileNameQ, AddrHex, Format, MinAddrHex, MaxLengthHex)
++
++        #
++        # Displays image section sizes and addresses as if filename were loaded into target memory starting at address (defaults to zero).
++        # #The file format may optionally be specified (bin, ihex, or elf)
++        #
++        def Test(self, Filename, Addr=None, Bin=False, IHex=False, Elf=False, S19=False, MinAddr=None):
++            FileNameQ = '"%s"' % Filename
++            AddrHex = None if Addr is None else OpenOCD.ValueHex(Addr)
++            Format = OpenOCD.ImageFormat(Bin, IHex, Elf, S19)
++            return self.OCD.Exec('test_image', FileNameQ, AddrHex, Format)
++
++        #
++        # Verify filename against target memory starting at address.
++        # The file format may optionally be specified (bin, ihex, or elf)
++        # This will first attempt a comparison using a CRC checksum, if this fails it will try a binary compare.
++        #
++        def Verify(self, Filename, Addr, Bin=False, IHex=False, Elf=False, S19=False, MinAddr=None):
++            FileNameQ = '"%s"' % Filename
++            AddrHex = OpenOCD.ValueHex(Addr)
++            Format = OpenOCD.ImageFormat(Bin, IHex, Elf, S19)
++            return self.OCD.Exec('verify_image', FileNameQ, AddrHex, Format)
++
++        #
++        # Verify filename against target memory starting at address.
++        # The file format may optionally be specified (bin, ihex, or elf)
++        # This perform a comparison using a CRC checksum only
++        #
++        def VerifyChecksum(self, Filename, Addr, Bin=False, IHex=False, Elf=False, S19=False, MinAddr=None):
++            FileNameQ = '"%s"' % Filename
++            AddrHex = OpenOCD.ValueHex(Addr)
++            Format = OpenOCD.ImageFormat(Bin, IHex, Elf, S19)
++            return self.OCD.Exec('verify_image_checksum', FileNameQ, AddrHex, Format)
++
++    def Image(self):
++        return self.ImageOCD(self)
++
++    #
++    # NOR flash command group (command valid any time)
++    #
++    class FlashOCD:
++        def __init__(self, OCD):
++            self.OCD = OCD
++
++        #
++        # Display table with information about flash banks. (command valid any time)
++        #
++        def Banks():
++            pass
++
++        #
++        # Erase flash sectors starting at address and continuing for length bytes.
++        # If 'pad' is specified, data outside that range may also be erased:
++        # the start address may be decreased, and length increased, so that all of the first and last sectors are erased.
++        # If 'unlock' is specified, then the flash is unprotected before erasing. 
++        #
++        def EraseAddress(Addr, Length, Pad=None, Unlock=False):
++            pass
++
++        #
++        # Check erase state of all blocks in a flash bank.
++        #
++        def EraseCheck(BankId):
++            pass
++
++        #
++        # Erase a range of sectors in a flash bank.
++        #
++        def EraseSector(BankId, FirstSectorNum, LastSectorNum):
++            pass
++
++        #
++        # Fill N bytes with 8-bit value, starting at word address. (Noautoerase.)
++        #
++        def Fill8(Addr, Value8, N):
++            pass
++
++        #
++        # Fill N halfwords with 16-bit value, starting at word address. (Noautoerase.)
++        #
++        def Fill16(Addr, Value16, N):
++            pass
++
++        #
++        # Fill N words with 16-bit value, starting at word address. (Noautoerase.)
++        #
++        def Fill32(Addr, Value32, N):
++            pass
++
++        #
++        # Returns information about a flash bank.
++        #
++        def Info(BankId):
++            pass
++
++        #
++        # Returns a list of details about the flash banks. (command valid anytime)
++        #
++        def List():
++            pass
++
++        #
++        # Set default flash padded value
++        #
++        def SetPadValue(BankId, Value):
++            pass
++
++        #
++        # Identify a flash bank.
++        #
++        def Probe(BankId):
++            pass
++
++        #
++        # Turn protection on or off for a range of protection blocks or sectors in a given flash bank.
++        # See 'Info' output for a list of blocks.
++        #
++        def Protect(BankId, FirstBlock, LastBlock=None, On=False):
++            pass
++
++        #
++        # Read binary data from flash bank to file, starting at specified byte offset from the beginning of the bank.
++        #
++        def ReadBank(BankId, Filename, Offset, Length):
++            pass
++        
++        #
++        # Read binary data from flash bank and file, starting at specified byte offset from the beginning of the bank.
++        # Compare the contents.
++        #
++        def VerifyBank(BankId, Filename, Offset, Length):
++            pass
++
++        #
++        # Write binary data from file to flash bank, starting at specified byte offset from the beginning of the bank.
++        #
++        def WriteBank(BankId, Filename, Offset):
++            pass
++
++        def WriteImage(Filename, Erase=False, Unlock=False, Offset=None, Bin=False, IHex=False, Elf=False, S19=False):
++            pass
++
++    def Flash():
++        return FlashOCD(self)
++
++#-------------------------------------------------------------------------------------------------
++
+diff --git a/test/verifheep/bus_sniffer.py b/test/verifheep/bus_sniffer.py
+new file mode 100755
+index 0000000..a316e3a
+--- /dev/null
++++ b/test/verifheep/bus_sniffer.py
+@@ -0,0 +1,155 @@
++#!/usr/bin/env python3
++import pexpect, re, sys
++
++# --- MMIO map
++CTRL_ADDR    = 0x30080000  # SNI_CTRL
++STATUS_ADDR  = 0x30080004  # SNI_STATUS
++DATA_ADDR    = 0x30080008  # SNI_DATA0..3
++
++# --- CTRL bits
++EN_BIT         = 1 << 0
++RST_FIFO_BIT   = 1 << 1
++FRAME_READ_BIT = 1 << 2
++
++# --- STATUS bits
++EMPTY_BIT       = 1 << 0
++FULL_BIT        = 1 << 1
++FRAME_AVAIL_BIT = 1 << 2
++
++# ------------ GDB helpers ------------
++def gsend(child, cmd):
++    child.sendline(cmd)
++    child.expect(r"\(gdb\)\s*$")
++
++def gget(child, cmd):
++    child.sendline(cmd)
++    child.expect(r"\(gdb\)\s*$")
++    return child.before.decode()
++
++def read_word(child, addr):
++    out = gget(child, f"x/wx {addr:#x}")
++    m = re.search(r":\s*(0x[0-9A-Fa-f]+)", out)
++    if not m:
++        raise RuntimeError(f"x/wx parse failed:\n{out}")
++    return int(m.group(1), 16)
++
++def read_status_and_data(child):
++    """
++    Reads STATUS and the 4 data words in one shot:
++      x/5xw STATUS_ADDR  ->  STATUS, DATA0, DATA1, DATA2, DATA3
++    Returns (status, [w0,w1,w2,w3])
++    """
++    out = gget(child, f"x/5xw {STATUS_ADDR:#x}")
++    toks = re.findall(r"0x[0-9A-Fa-f]+", out)
++    # Expected: ["0xADDR", "0xSTATUS", "0xD0", "0xD1", "0xD2", "0xD3"]
++    if len(toks) < 6:
++        raise RuntimeError(f"x/5xw parse failed:\n{out}")
++    vals = [int(t, 16) for t in toks[-5:]]  # drop the printed address
++    status = vals[0]
++    data4  = vals[1:]
++    return status, data4
++
++def write_word(child, addr, val):
++    gsend(child, f"set *(unsigned int*){addr:#x} = {val:#x}")
++
++def combine128(ws):
++    return (ws[0] << 96) | (ws[1] << 64) | (ws[2] << 32) | ws[3]
++
++def dump_frame(v):
++    src     = (v>>124)&0xF
++    req_ts  = (v>>92)&0xFFFFFFFF
++    resp_ts = (v>>76)&0xFFFF
++    addr    = (v>>44)&0xFFFFFFFF
++    data    = (v>>12)&0xFFFFFFFF
++    be      = (v>>8)&0xF
++    we      = (v>>7)&1
++    valid   = (v>>6)&1
++    gnt     = (v>>5)&1
++    names   = {1:"CORE_INSTR",2:"CORE_DATA",3:"AO_PERIPH",4:"PERIPH",
++               5:"RAM0",6:"RAM1",7:"FLASH",8:"DMA_READ",9:"DMA_WRITE",10:"DMA_ADDR"}
++    print(f"""── FRAME ─────────────────────────────
++  source    : {names.get(src,src)}
++  req_ts    : 0x{req_ts:08X}
++  resp_ts   : 0x{resp_ts:04X}
++  address   : 0x{addr:08X}
++  data      : 0x{data:08X}
++  byte_en   : 0x{be:X}
++  we        : {we}
++  valid     : {valid}
++  gnt       : {gnt}
++───────────────────────────────────────""")
++
++# ------------ main flow ------------
++def main():
++    elf = "/home/riccardo/git/hep/x-heep/sw/build/main.elf"
++    gdb = "/home/riccardo/tools/riscv/bin/riscv32-unknown-elf-gdb"
++
++    child = pexpect.spawn(f"{gdb} --nx --quiet {elf}", timeout=300)
++    child.expect(r"\(gdb\)\s*$")
++    print("GDB prompt received.")
++
++    # Setup exactly as richiesto
++    for cmd in [
++        "set target-async on",
++        "set pagination off",
++        "set confirm off",
++        "set remotetimeout 2000",
++        "target remote localhost:3333",
++        "load",
++        "c",
++    ]:
++        gsend(child, cmd)
++
++    print(">>> Starting program and entering pump loop")
++
++    frames = []
++
++    while True:
++        # siamo qui perché 'c' si è fermato (SIGTRAP/SIGINT)
++        print(">>> HALT detected")
++
++        # --- initial_pop: prima di leggere, forza un pop con ACK (EN|FRAME_READ = 0x5)
++        write_word(child, CTRL_ADDR, EN_BIT | FRAME_READ_BIT)
++
++        # --- drain loop ---
++        while True:
++            status, data4 = read_status_and_data(child)
++            v128 = combine128(data4)
++            frames.append((status, data4))
++            dump_frame(v128)
++
++            # Se è EMPTY, leggi comunque (già fatto) e termina il drain
++            if status & EMPTY_BIT:
++                print(">>> STATUS: EMPTY → stop draining.")
++                break
++
++            # Altrimenti chiedi il prossimo frame con un altro ACK
++            write_word(child, CTRL_ADDR, EN_BIT | FRAME_READ_BIT)
++
++        # resetta la FIFO (2 → 1)
++        print(">>> Reset FIFO (2 → 1)")
++        write_word(child, CTRL_ADDR, RST_FIFO_BIT)      # 0x2
++        write_word(child, CTRL_ADDR, EN_BIT)             # 0x1
++
++        # continua: o nuovo SIGTRAP o fine programma
++        child.sendline("c")
++        i = child.expect([r"\(gdb\)\s*$",
++                          r"Program exited",
++                          r"exited with code",
++                          pexpect.EOF])
++        if i == 0:
++            # nuovo halt → ripeti ciclo
++            continue
++        else:
++            print(">>> Program ended, exiting.")
++            break
++
++    child.sendline("quit")
++    child.expect(pexpect.EOF)
++
++if __name__ == "__main__":
++    try:
++        main()
++    except pexpect.TIMEOUT:
++        print("TIMEOUT from GDB. Se capita durante accessi memoria, verifica che l’hardware risponda anche a core fermo.")
++        sys.exit(1)
+diff --git a/test/verifheep/myverifheep.py b/test/verifheep/myverifheep.py
+new file mode 100644
+index 0000000..8a80a33
+--- /dev/null
++++ b/test/verifheep/myverifheep.py
+@@ -0,0 +1,535 @@
++#
++#     Copyright EPFL contributors.
++#     Licensed under the Apache License, Version 2.0, see LICENSE for details.
++#     SPDX-License-Identifier: Apache-2.0
++#
++#     Author: Tommaso Terzano <tommaso.terzano@epfl.ch>
++#                             <tommaso.terzano@gmail.com>
++#
++#     Info: This library can be used to implement a software-based verification of X-Heep on a variety of targets,
++#           including Verilator, QuestaSim and FPGA (pynq-z2), using gdb and OpenOCD. 
++#           Some useful information:
++#
++#           1) In order to enable the elaboration of the outcome of a test, the SW testbench should produce data using
++#              the following format:
++#              - 1st line to n line: "<ID>:<cycles>:<outcome>"
++#              - last line: "&"
++#              Of course it is not mandatory to count the cycles, or to provide an outcome, or even to use different IDs.
++#              The crucial thing is to use the format, even if only one of its fields is relevant for your usecase.
++#
++#           2) The library provides methods to generate a random input dataset + a golden output dataset
++#              using a provided function. 
++#              This is particularly useful for data-processing applications and accelerators, but could be used to test other
++#              units with some workarounds.
++#              If the function returns a dictionary of parameters that might be useful for the application (if not, return None), 
++#              they will be written in the same header file as the golden output.
++#              The application has to be written in order to use an external output, defined in a header file, 
++#              and to compare it against a golden output, also defined in a header. 
++#              Both the name and directories of these datasets can be provided as arguments.
++#              It is also possible to generate a golden result starting from a custom input dataset, provided that it was produced
++#              using the same structure.#              
++#
++#           3) The library provides methods to estimate the remaining time of the execution of a loop, based on the average duration
++#              of the iterations that have already been executed. 
++#              This is useful to estimate the remaining time of the execution of a multi-iteration test.
++#           
++
++import subprocess
++import sys
++import re
++import time
++import serial
++import pexpect
++import threading
++import queue
++import random
++import os
++
++# Set this to True to enable debugging prints
++DEBUG_MODE = False
++
++def PRINT_DEB(*args, **kwargs):
++    if DEBUG_MODE:
++        print(*args, **kwargs)
++
++class VerifHeep:
++    def __init__(self, target, xheep_dir, opt_en=False):
++        self.target = target
++        if target not in ['verilator', 'questasim', 'pynq-z2']:
++            raise Exception(f'Target {target} not supported. Choose one among:\n- verilator\n- questasim (with optional optimization)\n- pynq-z2\n')
++        if (target != 'pynq-z2' and opt_en) or (target != 'verilator' and opt_en):
++            raise Exception(f'Target {target} not supported with {opt_en}. Choose one among:\n- verilator\n- questasim (with optional optimization)\n- pynq-z2\n')
++
++        self.opt_en = opt_en
++        self.xheep_dir = xheep_dir
++        self.results = []
++        self.it_times = []
++
++    def resetAll(self):
++        self.results = []
++        self.it_times = []
++        if self.ser.is_open:
++          self.ser.close()
++        self.ser = None
++        self.serial_queue = None
++        self.serial_thread = None
++        self.gdb = None
++        self.xheep_dir = None
++
++    def clearResults(self):
++        self.results = []
++
++    # Synthesis & Simulation methods
++    
++    def compileModel(self, mem_banks=6, cpu="cv32e40px", bus="1toN"):
++        mcu_gen_cmd = f"cd {self.xheep_dir} ; make mcu-gen MEMORY_BANKS={mem_banks} CPU={cpu} BUS={bus}"
++        subprocess.run(mcu_gen_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True)
++        # if ("ERROR" in mcu_gen_cmd.stderr) or ("error" in mcu_gen_cmd.stderr):
++        #     print(mcu_gen_cmd.stderr)
++        #     exit(1)
++        if ("ERROR" in mcu_gen_cmd) or ("error" in mcu_gen_cmd):
++            print("Compilation failed. Output:")
++            print(mcu_gen_cmd)
++            exit(1)
++    
++    def buildModel(self):
++        if self.target == 'verilator':
++            cmd = f'cd {self.xheep_dir} ; make verilator-sim FUSESOC_PARAM=--JTAG_DPI=1'
++        elif self.target == 'questasim' and self.opt_en:
++            cmd = f'cd {self.xheep_dir} ; make questasim-sim-opt FUSESOC_PARAM=--JTAG_DPI=1'
++        elif self.target == 'questasim' and not self.opt_en:
++            cmd = f'cd {self.xheep_dir} ; make questasim-sim'
++        elif self.target == 'pynq-z2':
++            cmd = f"cd {self.xheep_dir} ; make vivado-fpga FPGA_BOARD={self.target} FUSESOC_FLAGS=--flag=use_bscane_xilinx"
++        # result_synth = subprocess.run(cmd, shell=True, capture_output=True, text=True, executable="/bin/bash")
++        result_synth = subprocess.run(cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, executable="/bin/bash")
++
++        if ("ERROR" in result_synth.stderr) or ("error" in result_synth.stderr):
++            print(result_synth.stderr)
++            exit(1)
++
++    # FPGA programming & debugging methods
++    
++    def serialBegin(self, port, baudrate):
++        try:
++            self.ser = serial.Serial(port, baudrate, timeout=1)
++            self.serial_queue = queue.Queue()
++            
++            if self.ser.is_open:
++                print("Connection successful")
++                return True
++            else:
++                print("Failed to open the connection")
++                return False
++        except serial.SerialException as e:
++            print(f"Serial exception: {e}")
++            return False
++        except Exception as e:
++            print(f"An error occurred: {e}")
++            return False
++
++    def setUpDeb(self):
++        gdb_cmd = f"""
++        cd {self.xheep_dir}
++        $RISCV/bin/riscv32-unknown-elf-gdb ./sw/build/main.elf
++        """
++        self.gdb = pexpect.spawn(f"/bin/bash -c '{gdb_cmd}'")
++        self.gdb.expect('(gdb)')
++        self.gdb.sendline('set remotetimeout 2000')
++        self.gdb.expect('(gdb)')
++        self.gdb.sendline('target remote localhost:3333')
++        self.gdb.expect('(gdb)')
++
++        if self.gdb.isalive():
++            PRINT_DEB("GDB process is still running.")
++        else:
++            PRINT_DEB("GDB process has terminated.")
++            if self.gdb.exitstatus is not None:
++                print(f"GDB exit status: {self.gdb.exitstatus}")
++            if self.gdb.signalstatus is not None:
++                print(f"GDB terminated by signal: {self.gdb.signalstatus}")
++            exit(1)
++            
++    def stopDeb(self):
++        # if self.target != "verilator" and self.gdb is not None:
++            self.gdb.sendcontrol('c')
++            self.gdb.terminate()
++
++    def launchTest(self, example_name, input_size=0, pattern=r'(\d+):(\d+):(\d+)', en_timeout_term=False):
++        PRINT_DEB(f"Running test {example_name} with input size {input_size}...")
++        # if self.target == "verilator":
++        self.ser = None  # or set to a dummy object that supports is_open
++        # else:
++        # Check that the serial connection is still open
++        if self.ser is not None and not self.ser.is_open:
++            print("Serial port not open.")
++            exit(1)
++
++        # Set up the serial communication thread and attach it the serial queue
++        self.serial_thread = threading.Thread(target=SerialReceiver, args=(self.ser, self.serial_queue,))
++
++        # Start the serial thread
++        self.serial_thread.start()
++
++        # Compile the application
++        if self.target == 'verilator' or self.target == 'questasim':
++          app_compile_run_com = f"cd {self.xheep_dir} ; make run-app-verilator PROJECT={example_name}"
++        else:
++          app_compile_run_com = f"cd {self.xheep_dir} ; make app PROJECT={example_name} TARGET={self.target}"
++
++        # result_compilation = subprocess.run(app_compile_run_com, shell=True, capture_output=True, text=True)
++
++
++        
++        subprocess.run(app_compile_run_com, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True)
++        
++        # if ("Error" in result_compilation.stderr) or ("error" in result_compilation.stderr):
++        #     print(result_compilation.stderr)
++        #     return
++        # else:
++        #     PRINT_DEB("Compilation successful!")
++        
++        if self.target != "verilator" and self.gdb is not None:
++            self.gdb.sendline('load')
++            self.gdb.expect('(gdb)')
++            try:
++                output = self.gdb.read_nonblocking(size=100, timeout=1)
++                PRINT_DEB("Current gdb output:", output)
++            except pexpect.TIMEOUT:
++                PRINT_DEB("No new output from GDB.")
++
++            # Set a breakpoint at the exit and wait for it
++            self.gdb.sendline('b _exit')
++            self.gdb.expect('(gdb)')
++            self.gdb.sendline('continue')
++            try:
++                self.gdb.expect('Breakpoint', timeout=600)
++            except pexpect.TIMEOUT:
++                print("Timeout! Program didn't answer in time, exiting...")
++            self.gdb.terminate()
++            if en_timeout_term:
++                exit(1)
++            return
++        else:
++            print("Skipping GDB load command for simulation target")
++        # # Run the testbench with gdb
++        # self.gdb.sendline('load')
++        # self.gdb.expect('(gdb)')
++
++        # try:
++        #   output = self.gdb.read_nonblocking(size=100, timeout=1)
++        #   PRINT_DEB("Current gdb output:", output)
++        # except pexpect.TIMEOUT:
++        #   PRINT_DEB("No new output from GDB.")
++
++        # # Set a breakpoint at the exit and wait for it
++        # self.gdb.sendline('b _exit')
++        # self.gdb.expect('(gdb)')
++        # self.gdb.sendline('continue')
++        # try:
++        #   self.gdb.expect('Breakpoint', timeout=600)
++        # except pexpect.TIMEOUT:
++        #   print("Timeout! Program didn't answer in time, exiting...")
++        #   self.gdb.terminate()
++        #   if en_timeout_term:
++        #     exit(1)
++        #   return
++        
++        # Wait for serial to finish
++        self.serial_thread.join()
++
++        # Recover the lines
++        lines = []
++        while not self.serial_queue.empty():
++            lines.append(self.serial_queue.get())
++
++        # Analyse the results
++        pattern = re.compile(pattern)  
++        test_id = None
++        for line in lines:
++            match = pattern.search(line)
++            if match:
++                test_id = match.group(1)
++                cycle_count = match.group(2)
++                outcome = match.group(3)
++                self.results.append({ "ID" : test_id, "Cycles": cycle_count, "Outcome": outcome, "Input size": input_size })
++
++    def dumpResults(self, filename="results.txt"):
++        with open(filename, 'w') as f:
++            for result in self.results:
++                f.write(result + '\n')
++
++    # Performance estimation methods
++    
++    def chronoStart(self):
++        self.start_time = time.time()
++    
++    def chronoStop(self):
++        self.end_time = time.time()
++        self.it_times.append(self.end_time - self.start_time)
++        return self.end_time - self.start_time
++    
++    def chronoExecutionEst(self, loop_size):
++        avg_duration = sum(self.it_times) / len(self.it_times)
++        remaining_it = loop_size - len(self.it_times)
++        remaining_time_raw = remaining_it * avg_duration
++        remaining_time = {}
++        remaining_time["hours"], remainder = divmod(remaining_time_raw, 3600)
++        remaining_time["minutes"], remaining_time["seconds"] = divmod(remainder, 60)
++        return remaining_time
++    
++    # Data generation methods
++
++    def genInputDataset(self, dataset_size, parameters="", row_size=0, range_min=0, range_max=1, dataset_dir="input_dataset.h", dataset_dir_c="", dataset_name="input_dataset", datatype="uint32_t"):
++        
++        if dataset_dir_c == "":
++          with open(dataset_dir, 'w') as f:
++            # Add license
++            f.write(f"#ifndef {dataset_name.upper()}_H\n")
++            f.write(f"#define {dataset_name.upper()}_H\n\n")
++            license = "/*\n\tCopyright EPFL contributors.\n\tLicensed under the Apache License, Version 2.0, see LICENSE for details.\n\tSPDX-License-Identifier: Apache-2.0\n*/\n\n"
++            f.write(license)
++            f.write(f"#include <stdint.h>\n\n")
++
++            # Write the parameters, if there are any
++            if parameters:
++                for key, value in parameters.items():
++                    f.write(f"#define {key} {value}\n")
++
++            # Vector declaration
++            f.write(f"const {datatype} {dataset_name}[{dataset_size}] = " + "{\n")
++            
++            # Generate the random vector
++            for i in range(dataset_size):
++                if 'float' in datatype:
++                    value = random.uniform(range_min, range_max)  # float
++                elif 'uint' in datatype:
++                    if ('8' in datatype or '16' in datatype or '32' in datatype) and range_min >= 0 and range_max > 0:
++                        value = random.randint(range_min, range_max)
++                    else:
++                        print("Error: invalid datatype. Choose one among:\n- float\n- u/int8_t\n- u/int16_t\n- u/int32_t\n")
++                        exit(1)
++                elif 'int' in datatype:
++                    if ('8' in datatype or '16' in datatype or '32' in datatype):
++                        value = random.randint(range_min, range_max)
++                    else:
++                        print("Error: invalid datatype. Choose one among:\n- float\n- u/int8_t\n- u/int16_t\n- u/int32_t\n")
++                        exit(1)
++                else:
++                  print("Error: invalid datatype. Choose one among:\n- float\n- u/int8_t\n- u/int16_t\n- u/int32_t\n")
++                  exit(1)
++
++                if i < dataset_size - 1:
++                    f.write(f" {value},")
++                else:
++                    f.write(f" {value}")
++              
++                if row_size > 0 and (i + 1) % row_size == 0:
++                  f.write("\n")
++            
++            # Close the file
++            f.write("};\n\n")
++            f.write(f"#endif // {dataset_name.upper()}_H\n")
++        else:
++          with open(dataset_dir_c, 'w') as f:
++            # Add license
++            license = "/*\n\tCopyright EPFL contributors.\n\tLicensed under the Apache License, Version 2.0, see LICENSE for details.\n\tSPDX-License-Identifier: Apache-2.0\n*/\n\n"
++            f.write(license)
++            f.write(f'#include "{os.path.basename(dataset_dir)}"\n\n')
++            
++            # Vector declaration
++            f.write(f"const {datatype} {dataset_name}[{dataset_size}] = " + "{\n")
++            
++            # Generate the random vector
++            for i in range(dataset_size):
++                if 'float' in datatype:
++                    value = random.uniform(range_min, range_max)  # float
++                elif 'uint' in datatype:
++                    if ('8' in datatype or '16' in datatype or '32' in datatype) and range_min >= 0 and range_max > 0:
++                        value = random.randint(range_min, range_max)
++                    else:
++                        print("Error: invalid datatype. Choose one among:\n- float\n- u/int8_t\n- u/int16_t\n- u/int32_t\n")
++                        exit(1)
++                elif 'int' in datatype:
++                    if ('8' in datatype or '16' in datatype or '32' in datatype):
++                        value = random.randint(range_min, range_max)
++                    else:
++                        print("Error: invalid datatype. Choose one among:\n- float\n- u/int8_t\n- u/int16_t\n- u/int32_t\n")
++                        exit(1)
++                else:
++                  print("Error: invalid datatype. Choose one among:\n- float\n- u/int8_t\n- u/int16_t\n- u/int32_t\n")
++                  exit(1)
++
++                if i < dataset_size - 1:
++                    f.write(f" {value},")
++                else:
++                    f.write(f" {value}")
++              
++                if row_size > 0 and (i + 1) % row_size == 0:
++                  f.write("\n")
++              
++            # Close the file
++            f.write("};\n\n")
++          
++          with open(dataset_dir, 'w') as f:
++            # Add license
++            f.write(f"#ifndef {dataset_name.upper()}_H\n")
++            f.write(f"#define {dataset_name.upper()}_H\n\n")
++            license = "/*\n\tCopyright EPFL contributors.\n\tLicensed under the Apache License, Version 2.0, see LICENSE for details.\n\tSPDX-License-Identifier: Apache-2.0\n*/\n\n"
++            f.write(license)
++            f.write(f"#include <stdint.h>\n\n")
++
++            # Write the parameters, if there are any
++            if parameters:
++                for key, value in parameters.items():
++                    f.write(f"#define {key} {value}\n")
++            
++            f.write("\n")
++
++            # Vector declaration
++            f.write(f"extern const {datatype} {dataset_name}[{dataset_size}];\n\n")
++            
++            # Close the file
++            f.write(f"#endif // {dataset_name.upper()}_H\n")
++
++    def genGoldenResult(self, function, golden_size, parameters, row_size=0, output_datatype="uint32_t",  input_dataset_dir="input_dataset.h", golden_dir_c="", golden_dir="golden_output.h", golden_name = "golden_output"):
++        
++        # Recover the input dataset
++        with open(input_dataset_dir, 'r') as f:
++            content = f.read()
++
++        # Use regular expressions to find the array data
++        pattern = re.compile(r"{(.*?)}", re.DOTALL)
++        match = pattern.search(content)
++
++        if not match:
++            raise ValueError("No array data found in the file.")
++
++        array_data = match.group(1)
++        # Remove extra whitespace and split the string into individual values
++        array_data = array_data.replace('\n', '').replace(' ', '')
++        values = array_data.split(',')
++
++        # Convert values to the appropriate type
++        if "float" in content:
++            values = [float(value) for value in values]
++        elif "uint8_t" in content or "uint16_t" in content or "uint32_t" in content:
++            values = [int(value) for value in values]
++        elif "int8_t" in content or "int16_t" in content or "int32_t" in content:
++            values = [int(value) for value in values]
++
++        # Generate the golden result
++        (golden_values, output_parameters) = function(values, parameters)
++
++        if golden_dir_c == "":
++          with open(golden_dir, 'w') as f:
++            # Write the golden result to a file
++            f.write(f"#ifndef {golden_name.upper()}_H\n")
++            f.write(f"#define {golden_name.upper()}_H\n\n")
++            license = "/*\n\tCopyright EPFL contributors.\n\tLicensed under the Apache License, Version 2.0, see LICENSE for details.\n\tSPDX-License-Identifier: Apache-2.0\n*/\n\n"
++            f.write(license)
++            f.write(f"#include <stdint.h>\n\n")
++
++            # Write the parameters that could have been returned from the function
++            if output_parameters:
++              for key, value in output_parameters.items():
++                  f.write(f"#define {key} {value}\n")
++            
++            f.write("\n")
++
++            # Vector declaration
++            f.write(f"const {output_datatype} {golden_name}[{golden_size}] = " + "{\n")
++
++            for i in range(golden_size):
++              if i < golden_size - 1:
++                f.write(f" {golden_values[i]},")
++              else:
++                f.write(f" {golden_values[i]}")
++              
++              if row_size > 0 and (i + 1) % row_size == 0:
++                f.write("\n")
++
++            # Close the file
++            f.write("};\n\n")
++            f.write(f"#endif // {golden_name.upper()}_H\n")
++        else:
++          with open(golden_dir_c, 'w') as f:
++            # Write the golden result to a file
++            license = "/*\n\tCopyright EPFL contributors.\n\tLicensed under the Apache License, Version 2.0, see LICENSE for details.\n\tSPDX-License-Identifier: Apache-2.0\n*/\n\n"
++            f.write(license)
++            f.write(f'#include "{os.path.basename(golden_dir)}"\n\n')
++            
++            # Vector declaration
++            f.write(f"const {output_datatype} {golden_name}[{golden_size}] = " + "{\n")
++
++            for i in range(golden_size):
++              if i < golden_size - 1:
++                f.write(f" {golden_values[i]},")
++              else:
++                f.write(f" {golden_values[i]}")
++                
++              if row_size > 0 and (i + 1) % row_size == 0:
++                f.write("\n")
++
++            # Close the file
++            f.write("};\n\n")
++
++          with open(golden_dir, 'w') as f:
++            # Write the golden result to a file
++            f.write(f"#ifndef {golden_name.upper()}_H\n")
++            f.write(f"#define {golden_name.upper()}_H\n\n")
++            license = "/*\n\tCopyright EPFL contributors.\n\tLicensed under the Apache License, Version 2.0, see LICENSE for details.\n\tSPDX-License-Identifier: Apache-2.0\n*/\n\n"
++            f.write(license)
++            f.write(f"#include <stdint.h>\n\n")
++
++            # Write the parameters that could have been returned from the function
++            if output_parameters:
++              for key, value in output_parameters.items():
++                  f.write(f"#define {key} {value}\n")
++
++            # Vector declaration
++            f.write(f"extern const {output_datatype} {golden_name}[{golden_size}];\n\n")
++
++            # Close the file
++            f.write(f"#endif // {golden_name.upper()}_H\n")
++
++    def modifyFile(self, file_dir, pattern, replacement):
++        
++        with open(file_dir, 'r') as f:
++          content = f.read()
++
++        # Replace the pattern with the replacement
++        new_content = re.sub(pattern, replacement, content)
++
++        with open(file_dir, 'w') as f:
++          f.write(new_content)
++
++# Serial communication thread
++
++def SerialReceiver(ser, serial_queue, endword="&"):
++    try:
++        if not ser.is_open:
++            raise serial.SerialException("Serial port not open")
++        
++        received = False
++        while not received:
++            # Read the data from the serial port
++            line = ser.readline().decode('utf-8').rstrip()
++            serial_queue.put(line)
++            PRINT_DEB(f">: {line}")
++            if line:
++                if endword in line:
++                    received = True
++                    PRINT_DEB(f"Received {endword}: end of serial transmission thread")
++                    return
++                elif "ERROR" in line:
++                    print("FAILED VERIFICATION!")
++                    exit(1)
++    except serial.SerialException as e:
++        print(f"Serial exception: {e}")
++    except Exception as e:
++        print(f"An error occurred: {e}")
++    except KeyboardInterrupt:
++        print("Keyboard interruption")
++    finally:
++        pass
+\ No newline at end of file
+diff --git a/test/verifheep/sniffer_dpi.py b/test/verifheep/sniffer_dpi.py
+new file mode 100755
+index 0000000..dbf4e05
+--- /dev/null
++++ b/test/verifheep/sniffer_dpi.py
+@@ -0,0 +1,210 @@
++#!/usr/bin/env python3
++import argparse, os, sys, time, re, struct, pexpect, signal
++
++# ----------------- MMIO map (aggiorna se necessario) -----------------
++CTRL_ADDR    = 0x30080000  # SNI_CTRL
++STATUS_ADDR  = 0x30080004  # SNI_STATUS
++DATA_ADDR    = 0x30080008  # SNI_DATA0..3
++
++# --- CTRL bits (DPI_ENABLE_BIT/HALT_ON_FULL_BIT -> 0 se non esistono a CSR)
++EN_BIT           = 1 << 0
++RST_FIFO_BIT     = 1 << 1
++FRAME_READ_BIT   = 1 << 2
++#DPI_ENABLE_BIT   = 1 << 3   # metti 0 se NON hai mappato il bit in HW
++#HALT_ON_FULL_BIT = 0        # es. 1<<4 se hai un enable per l'halt-on-full
++
++# --- STATUS bits (usati solo in modalità legacy o per debug sporadico)
++EMPTY_BIT        = 1 << 0
++FULL_BIT         = 1 << 1
++FRAME_AVAIL_BIT  = 1 << 2
++
++BIN_PATH_DEFAULT = "sniffer_frames.bin"  # file prodotto dalla DPI-C
++
++# ----------------- GDB helpers -----------------
++def gsend(child, cmd):
++    child.sendline(cmd)
++    child.expect(r"\(gdb\)\s*$")
++
++def gget(child, cmd):
++    child.sendline(cmd)
++    child.expect(r"\(gdb\)\s*$")
++    return child.before.decode()
++
++def write_word(child, addr, val):
++    gsend(child, f"set *(unsigned int*){addr:#x} = {val:#x}")
++
++def read_status_and_data(child):
++    out = gget(child, f"x/5xw {STATUS_ADDR:#x}")
++    toks = re.findall(r"0x[0-9A-Fa-f]+", out)
++    if len(toks) < 6:
++        raise RuntimeError(f"x/5xw parse failed:\n{out}")
++    vals = [int(t, 16) for t in toks[-5:]]
++    status, data4 = vals[0], vals[1:]
++    return status, data4
++
++def combine128(ws):  # DATA0=MSW
++    return (ws[0] << 96) | (ws[1] << 64) | (ws[2] << 32) | ws[3]
++
++def dump_frame(v):
++    src     = (v>>124)&0xF
++    req_ts  = (v>>92)&0xFFFFFFFF
++    resp_ts = (v>>76)&0xFFFF
++    addr    = (v>>44)&0xFFFFFFFF
++    data    = (v>>12)&0xFFFFFFFF
++    be      = (v>>8)&0xF
++    we      = (v>>7)&1
++    valid   = (v>>6)&1
++    gnt     = (v>>5)&1
++    names   = {1:"CORE_INSTR",2:"CORE_DATA",3:"AO_PERIPH",4:"PERIPH",
++               5:"RAM0",6:"RAM1",7:"FLASH",8:"DMA_READ",9:"DMA_WRITE",10:"DMA_ADDR"}
++    print(f"src={names.get(src,src):>10}  ts={req_ts:08X}/{resp_ts:04X}  "
++          f"addr={addr:08X}  data={data:08X}  be={be:X} we={we} v{valid} g{gnt}")
++
++# ----------------- File tail (DPI) -----------------
++def iter_frames_from_file(path, start_at_end=False, poll_sec=0.01):
++    # aspetta che il file appaia
++    while not os.path.exists(path):
++        time.sleep(poll_sec)
++    f = open(path, "rb", buffering=0)
++    if start_at_end:
++        f.seek(0, os.SEEK_END)
++    buf = b""
++    try:
++        while True:
++            chunk = f.read(4096)
++            if not chunk:
++                time.sleep(poll_sec)
++                continue
++            buf += chunk
++            while len(buf) >= 16:
++                frame = buf[:16]; buf = buf[16:]
++                # la DPI scrive 4x uint32_t little-endian
++                w0, w1, w2, w3 = struct.unpack("<IIII", frame)
++                yield (w0, w1, w2, w3)
++    finally:
++        f.close()
++
++# ----------------- Modalità LEGACY (solo se vuoi il vecchio flusso) -----------------
++def run_legacy(child):
++    print(">>> LEGACY mode: halt → ack/read → continue")
++    frames = 0
++    while True:
++        print(">>> HALT detected")
++        # initial pop
++        write_word(child, CTRL_ADDR, EN_BIT | FRAME_READ_BIT)
++        while True:
++            status, data4 = read_status_and_data(child)
++            v128 = combine128(data4)
++            dump_frame(v128)
++            frames += 1
++            if status & EMPTY_BIT:
++                print(">>> STATUS: EMPTY → stop draining.")
++                break
++            write_word(child, CTRL_ADDR, EN_BIT | FRAME_READ_BIT)
++        print(">>> Reset FIFO")
++        write_word(child, CTRL_ADDR, RST_FIFO_BIT)
++        write_word(child, CTRL_ADDR, EN_BIT)
++
++        child.sendline("c")
++        i = child.expect([r"\(gdb\)\s*$",
++                          r"Program exited",
++                          r"exited with code",
++                          pexpect.EOF])
++        if i == 0:
++            continue
++        else:
++            print(f">>> Program ended. Frames: {frames}")
++            break
++
++# ----------------- Modalità DPI -----------------
++def run_dpi(child, bin_path, max_frames=None, status_interval=0.0):
++    # Lato DPI è già attiva via parametro RTL. NIENTE MMIO qui.
++    print(">>> DPI mode: start target, stamo a parti pa tangente")
++    child.sendline("continue")  # niente expect del prompt
++
++    print(f">>> DPI mode: streaming da '{bin_path}' (Ctrl-C per uscire)")
++    n = 0
++    last_status_t = time.time()
++
++    # attesa soft del file (max 5s)
++    deadline = time.time() + 5.0
++    while not os.path.exists(bin_path) and time.time() < deadline:
++        time.sleep(0.05)
++    if not os.path.exists(bin_path):
++        print(f"ERRORE: '{bin_path}' non trovato. Sei nella stessa dir di Vtestharness?")
++        print("Suggerimento: lancia lo script dalla cartella sim-verilator o passa --bin con path assoluto.")
++        return
++
++    try:
++        for w0, w1, w2, w3 in iter_frames_from_file(bin_path, start_at_end=False):
++            v128 = combine128([w0, w1, w2, w3])
++            dump_frame(v128)
++            n += 1
++            if max_frames and n >= max_frames:
++                print(f">>> Raggiunti {n} frame, stop.")
++                break
++            if status_interval > 0 and (time.time() - last_status_t) >= status_interval:
++                try:
++                    out = gget(child, f"x/wx {STATUS_ADDR:#x}")
++                    m = re.search(r":\s*(0x[0-9A-Fa-f]+)", out)
++                    if m:
++                        st = int(m.group(1), 16)
++                        print(f"[STATUS] empty={bool(st & EMPTY_BIT)} full={bool(st & FULL_BIT)} frame_av={bool(st & FRAME_AVAIL_BIT)}")
++                except Exception:
++                    pass
++                last_status_t = time.time()
++    except KeyboardInterrupt:
++        print(f"\n>>> Interrotto. Frames letti: {n}")
++    finally:
++        try:
++            child.sendline("\x03")  # ^C
++            child.expect(r"\(gdb\)\s*$", timeout=1)
++        except Exception:
++            pass
++        child.sendline("quit")
++        try:
++            child.expect(pexpect.EOF, timeout=1)
++        except Exception:
++            pass
++
++
++# ----------------- main -----------------
++def main():
++    ap = argparse.ArgumentParser(description="Bus sniffer helper (DPI/Legacy)")
++    ap.add_argument("--elf", default="/home/riccardo/git/hep/x-heep/sw/build/main.elf")
++    ap.add_argument("--gdb", default="/home/riccardo/tools/riscv/bin/riscv32-unknown-elf-gdb")
++    ap.add_argument("--mode", choices=["dpi","legacy"], default="dpi",
++                    help="dpi = streaming via DPI file; legacy = halt/ack/read")
++    ap.add_argument("--bin", default=BIN_PATH_DEFAULT, help="path del file prodotto dalla DPI")
++    ap.add_argument("--max-frames", type=int, default=None, help="stop dopo N frame (solo dpi)")
++    ap.add_argument("--status-interval", type=float, default=0.0,
++                    help="stampa STATUS ogni X secondi (solo dpi)")
++    args = ap.parse_args()
++
++    child = pexpect.spawn(f"{args.gdb} --nx --quiet {args.elf}", timeout=300)
++    child.expect(r"\(gdb\)\s*$")
++    print("GDB prompt received.")
++
++    for cmd in [
++        "set target-async on",
++        "set pagination off",
++        "set confirm off",
++        "set remotetimeout 2000",
++        "target remote localhost:3333",
++        "load",
++    ]:
++        gsend(child, cmd)
++
++    if args.mode == "legacy":
++        # parte e si ferma al primo halt; da lì segue il vecchio flusso
++        gsend(child, "c")
++        run_legacy(child)
++    else:
++        run_dpi(child, args.bin, args.max_frames, args.status_interval)
++
++if __name__ == "__main__":
++    try:
++        main()
++    except pexpect.TIMEOUT:
++        print("TIMEOUT da GDB. Verifica OpenOCD/bridge e che l'hardware risponda.")
++        sys.exit(1)
+diff --git a/test/verifheep/svg_plot.py b/test/verifheep/svg_plot.py
+new file mode 100644
+index 0000000..d79aa3c
+--- /dev/null
++++ b/test/verifheep/svg_plot.py
+@@ -0,0 +1,155 @@
++#!/usr/bin/env python3
++import svgwrite
++
++# ----- Configuration Parameters -----
++TOTAL_CYCLES = 30         # Total clock cycles in the diagram
++SCALE = 20                # Pixels per clock cycle horizontally
++LABEL_X_OFFSET = 80       # Horizontal offset for the waveform area (to leave space for labels)
++SVG_WIDTH = LABEL_X_OFFSET + TOTAL_CYCLES * SCALE + 20
++SVG_HEIGHT = 350          # Increased height to accommodate extra signals
++
++# Signal timing for digital signals (in clock cycles)
++clock_y = 30         # Top of the clock waveform
++req_y   = 70         # Top of REQ waveform
++gnt_y   = 110        # Top of GNT waveform
++we_y    = 150        # Top of WE/BE waveform
++signal_height = 20   # Digital signal height (difference between high and low levels)
++
++# ----- Multi-bit Signal Data (example segments) -----
++# Each segment is defined as (start_cycle, end_cycle, value_label)
++# These values you would extract from your transaction.
++core_instr_segments = [
++    (0, 5, "NOP"),
++    (5, 10, "ADD")
++]
++
++address_segments = [
++    (0, 3, "0x00000000"),
++    (3, 8, "0x12345678"),
++    (8, 10, "0x12345678")
++]
++
++data_segments = [
++    (0, 6, "0x00000000"),
++    (6, 10, "0xDEADBEEF")
++]
++
++# Vertical positions (y offsets) for multi-bit signals
++core_instr_y = 190
++address_y    = 230
++data_y       = 270
++multibit_height = 25  # Height for multi-bit signal boxes
++
++# ----- Helper Functions for Drawing Digital Waveforms -----
++def y_for_level(y_offset, level, height):
++    """Returns the y coordinate for the given level (1=high, 0=low)."""
++    return y_offset if level == 1 else y_offset + height
++
++def draw_waveform(dwg, signal_name, transitions, x_offset, y_offset, scale, height):
++    """
++    Draw a stepped digital waveform.
++    
++    transitions: list of (cycle, level) tuples.
++    """
++    group = dwg.g()
++    # Label the signal on the left.
++    group.add(dwg.text(signal_name, insert=(0, y_offset + height/2 + 5),
++                        font_size="12px", fill="black"))
++    points = []
++    # Start at first transition:
++    t0, l0 = transitions[0]
++    points.append((x_offset + t0 * scale, y_for_level(y_offset, l0, height)))
++    for (t, level) in transitions[1:]:
++        points.append((x_offset + t * scale, y_for_level(y_offset, l0, height)))
++        points.append((x_offset + t * scale, y_for_level(y_offset, level, height)))
++        l0 = level
++    polyline = dwg.polyline(points=points, stroke="blue", stroke_width=2, fill="none")
++    group.add(polyline)
++    dwg.add(group)
++
++def draw_time_axis(dwg, total_cycles, x_offset, y_position, scale):
++    """Draws vertical grid lines and cycle numbers."""
++    for cycle in range(total_cycles + 1):
++        x = x_offset + cycle * scale
++        dwg.add(dwg.line(start=(x, y_position), end=(x, y_position + 10), stroke="gray", stroke_width=1))
++        dwg.add(dwg.text(str(cycle), insert=(x - 3, y_position + 25), font_size="10px", fill="gray"))
++
++# ----- Helper Functions for Drawing Multi-Bit Signals -----
++def draw_multibit_signal(dwg, signal_name, segments, x_offset, y_offset, scale, height):
++    """
++    Draw a multi-bit signal as a series of rectangular segments.
++    
++    segments: list of tuples (start_cycle, end_cycle, value_label).
++    Each segment is drawn as a rectangle spanning from start_cycle to end_cycle (converted to pixels)
++    and labeled with value_label.
++    """
++    group = dwg.g()
++    # Draw signal name on the left.
++    group.add(dwg.text(signal_name, insert=(0, y_offset + height/2 + 5),
++                        font_size="12px", fill="black"))
++    for (start, end, label) in segments:
++        x_start = x_offset + start * scale
++        width = (end - start) * scale
++        rect = dwg.rect(insert=(x_start, y_offset), size=(width, height),
++                        fill="white", stroke="black", stroke_width=1)
++        group.add(rect)
++        # Center the label in the rectangle.
++        mid_x = x_start + width/2
++        mid_y = y_offset + height/2 + 4
++        group.add(dwg.text(label, insert=(mid_x, mid_y),
++                           text_anchor="middle", font_size="12px", fill="black"))
++    dwg.add(group)
++
++# ----- Main Function to Create the SVG -----
++def main():
++    dwg = svgwrite.Drawing("timing_diagram.svg", size=(SVG_WIDTH, SVG_HEIGHT))
++
++    # Draw vertical cycle grid lines
++    draw_time_axis(dwg, TOTAL_CYCLES, LABEL_X_OFFSET, 20, SCALE)
++
++    # Draw digital signals:
++    # Clock: Simple square wave (even cycles high, odd cycles low)
++    clock_transitions = [(cycle, 1 if cycle % 2 == 0 else 0) for cycle in range(TOTAL_CYCLES + 1)]
++    draw_waveform(dwg, "CLK", clock_transitions, LABEL_X_OFFSET, clock_y, SCALE, signal_height)
++    
++    # REQ signal: low until cycle 10, high from 10 to 15, then low.
++    req_transitions = [
++        (0, 0),
++        (10, 0),
++        (10, 1),
++        (15, 1),
++        (15, 0),
++        (TOTAL_CYCLES, 0)
++    ]
++    draw_waveform(dwg, "REQ", req_transitions, LABEL_X_OFFSET, req_y, SCALE, signal_height)
++    
++    # GNT signal: low until cycle 15, high for one cycle, then low.
++    gnt_transitions = [
++        (0, 0),
++        (15, 0),
++        (15, 1),
++        (16, 1),
++        (16, 0),
++        (TOTAL_CYCLES, 0)
++    ]
++    draw_waveform(dwg, "GNT", gnt_transitions, LABEL_X_OFFSET, gnt_y, SCALE, signal_height)
++    
++    # WE/BE signal: Same as REQ for simplicity.
++    draw_waveform(dwg, "WE/BE", req_transitions, LABEL_X_OFFSET, we_y, SCALE, signal_height)
++    
++    # Draw multi-bit signals as additional rows.
++    # CORE_INSTR signal
++    draw_multibit_signal(dwg, "CORE_INSTR", core_instr_segments, LABEL_X_OFFSET, core_instr_y, SCALE, multibit_height)
++    
++    # ADDRESS signal
++    draw_multibit_signal(dwg, "ADDRESS", address_segments, LABEL_X_OFFSET, address_y, SCALE, multibit_height)
++    
++    # DATA signal
++    draw_multibit_signal(dwg, "DATA", data_segments, LABEL_X_OFFSET, data_y, SCALE, multibit_height)
++    
++    # Save the SVG output.
++    dwg.save()
++    print("SVG timing diagram saved as timing_diagram.svg")
++
++if __name__ == "__main__":
++    main()
+diff --git a/test/verifheep/verifheep.py b/test/verifheep/verifheep.py
+index 8cf07eb..7298994 100644
+--- a/test/verifheep/verifheep.py
++++ b/test/verifheep/verifheep.py
+@@ -45,7 +45,7 @@ import random
+ import os
+ 
+ # Set this to True to enable debugging prints
+-DEBUG_MODE = False
++DEBUG_MODE = True
+ 
+ def PRINT_DEB(*args, **kwargs):
+     if DEBUG_MODE:
+@@ -82,9 +82,13 @@ class VerifHeep:
+     
+     def compileModel(self, mem_banks=6, cpu="cv32e40px", bus="1toN"):
+         mcu_gen_cmd = f"cd {self.xheep_dir} ; make mcu-gen MEMORY_BANKS={mem_banks} CPU={cpu} BUS={bus}"
+-        subprocess.run(mcu_gen_cmd, shell=True, capture_output=True, text=True)
+-        if ("ERROR" in mcu_gen_cmd.stderr) or ("error" in mcu_gen_cmd.stderr):
+-            print(mcu_gen_cmd.stderr)
++        subprocess.run(mcu_gen_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True)
++        # if ("ERROR" in mcu_gen_cmd.stderr) or ("error" in mcu_gen_cmd.stderr):
++        #     print(mcu_gen_cmd.stderr)
++        #     exit(1)
++        if ("ERROR" in mcu_gen_cmd) or ("error" in mcu_gen_cmd):
++            print("Compilation failed. Output:")
++            print(mcu_gen_cmd)
+             exit(1)
+     
+     def buildModel(self):
+@@ -149,11 +153,13 @@ class VerifHeep:
+ 
+     def launchTest(self, example_name, input_size=0, pattern=r'(\d+):(\d+):(\d+)', en_timeout_term=False):
+         PRINT_DEB(f"Running test {example_name} with input size {input_size}...")
+-
++        # if self.target == "verilator":
++        self.ser = None  # or set to a dummy object that supports is_open
++        # else:
+         # Check that the serial connection is still open
+-        if not self.ser.is_open:
+-            print("Error: Serial port is not open!")
+-            exit(1) 
++        if self.ser is not None and not self.ser.is_open:
++            print("Serial port not open.")
++            exit(1)
+ 
+         # Set up the serial communication thread and attach it the serial queue
+         self.serial_thread = threading.Thread(target=SerialReceiver, args=(self.ser, self.serial_queue,))
+@@ -179,6 +185,7 @@ class VerifHeep:
+         self.gdb.sendline('load')
+         self.gdb.expect('(gdb)')
+ 
++
+         try:
+           output = self.gdb.read_nonblocking(size=100, timeout=1)
+           PRINT_DEB("Current gdb output:", output)
+@@ -495,4 +502,4 @@ def SerialReceiver(ser, serial_queue, endword="&"):
+     except KeyboardInterrupt:
+         print("Keyboard interruption")
+     finally:
+-        pass
+\ No newline at end of file
++        pass
