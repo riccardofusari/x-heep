@@ -154,6 +154,9 @@ This runs `regtool.py` to generate:
 This is the minimal flow (same sequence you used before):
 
 ```bash
+# 0) generate mcu
+make mcu-gen
+
 # 1) build the simulation with JTAG DPI enabled
 make verilator-sim FUSESOC_PARAM="--JTAG_DPI=1"
 

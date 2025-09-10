@@ -79,14 +79,14 @@ int main() {
     PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
 
 
-    PRINTF("%d+%d=%d\n", num1, num2, sum);
-    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+    // PRINTF("%d+%d=%d\n", num1, num2, sum);
+    // PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
 
     
-    PRINTF("%d+%d=%d\n", num1, num2, sum);
-    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
-    PRINTF("%d+%d=%d\n", num1, num2, sum);
-    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+    // PRINTF("%d+%d=%d\n", num1, num2, sum);
+    // PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+    // PRINTF("%d+%d=%d\n", num1, num2, sum);
+    // PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
 
     
 
@@ -98,7 +98,7 @@ int main() {
     //         raise(5);  // Pause in GDB (SIGTRAP)
     //         // break;           // Exit loop after trapping (optional)
     //     }
-    // }
-    PRINTF("Sum is %d.\n", sum);
+    // // }
+    // PRINTF("Sum is %d.\n", sum);
     return (sum == num1+num2) && (mul == num2*MULTIPLY_CONSTANT) ? EXIT_SUCCESS : EXIT_FAILURE;   
 }

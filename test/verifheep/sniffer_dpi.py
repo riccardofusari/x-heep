@@ -118,8 +118,8 @@ def run_legacy(child):
 
 # ----------------- Modalità DPI -----------------
 def run_dpi(child, bin_path, max_frames=None, status_interval=0.0):
-    # Lato DPI è già attiva via parametro RTL. NIENTE MMIO qui.
-    print(">>> DPI mode: start target, stamo a parti pa tangente")
+    # Lato DPI è già attiva via parametro RTL.
+    print(">>> DPI mode: start target")
     child.sendline("continue")  # niente expect del prompt
 
     print(f">>> DPI mode: streaming da '{bin_path}' (Ctrl-C per uscire)")
