@@ -26,6 +26,9 @@ package bus_sniffer_reg_pkg;
     struct packed {
       logic        q;
     } enable_gating;
+    struct packed {
+      logic        q;
+    } dpi_en;
   } bus_sniffer_reg2hw_sni_ctrl_reg_t;
 
   typedef struct packed {
@@ -100,7 +103,7 @@ package bus_sniffer_reg_pkg;
 
   // Register -> HW type
   typedef struct packed {
-    bus_sniffer_reg2hw_sni_ctrl_reg_t sni_ctrl; // [134:131]
+    bus_sniffer_reg2hw_sni_ctrl_reg_t sni_ctrl; // [135:131]
     bus_sniffer_reg2hw_sni_status_reg_t sni_status; // [130:128]
     bus_sniffer_reg2hw_sni_data0_reg_t sni_data0; // [127:96]
     bus_sniffer_reg2hw_sni_data1_reg_t sni_data1; // [95:64]

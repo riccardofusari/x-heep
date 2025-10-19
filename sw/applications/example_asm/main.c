@@ -75,8 +75,12 @@ int main() {
     int sum = add_asm_function(num1, num2);
     int mul = mul_by_const_asm_function(num2);
 
-    PRINTF("%d+%d=%d\n", num1, num2, sum);
-    PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+    for (int i = 0; i < 100; i++)
+    {
+        PRINTF("%d+%d=%d\n", num1, num2, sum);
+        PRINTF("%d*%d=%d\n", num2, MULTIPLY_CONSTANT, mul );
+    }
+
 
 
     // PRINTF("%d+%d=%d\n", num1, num2, sum);

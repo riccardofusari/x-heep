@@ -81,6 +81,9 @@ module bus_sniffer_reg_top #(
   logic sni_ctrl_enable_gating_qs;
   logic sni_ctrl_enable_gating_wd;
   logic sni_ctrl_enable_gating_we;
+  logic sni_ctrl_dpi_en_qs;
+  logic sni_ctrl_dpi_en_wd;
+  logic sni_ctrl_dpi_en_we;
   logic sni_status_empty_qs;
   logic sni_status_full_qs;
   logic sni_status_frame_avail_qs;
@@ -193,6 +196,32 @@ module bus_sniffer_reg_top #(
 
     // to register interface (read)
     .qs     (sni_ctrl_enable_gating_qs)
+  );
+
+
+  //   F[dpi_en]: 4:4
+  prim_subreg #(
+    .DW      (1),
+    .SWACCESS("RW"),
+    .RESVAL  (1'h0)
+  ) u_sni_ctrl_dpi_en (
+    .clk_i   (clk_i    ),
+    .rst_ni  (rst_ni  ),
+
+    // from register interface
+    .we     (sni_ctrl_dpi_en_we),
+    .wd     (sni_ctrl_dpi_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0  ),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.sni_ctrl.dpi_en.q ),
+
+    // to register interface (read)
+    .qs     (sni_ctrl_dpi_en_qs)
   );
 
 
@@ -415,6 +444,9 @@ module bus_sniffer_reg_top #(
   assign sni_ctrl_enable_gating_we = addr_hit[0] & reg_we & !reg_error;
   assign sni_ctrl_enable_gating_wd = reg_wdata[3];
 
+  assign sni_ctrl_dpi_en_we = addr_hit[0] & reg_we & !reg_error;
+  assign sni_ctrl_dpi_en_wd = reg_wdata[4];
+
   // Read data return
   always_comb begin
     reg_rdata_next = '0;
@@ -424,6 +456,7 @@ module bus_sniffer_reg_top #(
         reg_rdata_next[1] = sni_ctrl_rst_fifo_qs;
         reg_rdata_next[2] = sni_ctrl_frame_read_qs;
         reg_rdata_next[3] = sni_ctrl_enable_gating_qs;
+        reg_rdata_next[4] = sni_ctrl_dpi_en_qs;
       end
 
       addr_hit[1]: begin

@@ -1,11 +1,11 @@
 // === Enable & DPI import ===
-parameter bit DPI_ENABLE = 1'b1;     // metti 0 per disabilitare rapidamente
+parameter bit DPI_ENABLE = 1'b1;     // 1 on, 0 off. Put 0 to rapidly deactivate dpi feature
 parameter int DPI_STREAM_ID = 0;
 
 import "DPI-C" function int sniffer_dpi_push
 (
   input int stream_id,
-  input int nwords,                  // 4 fisse per il tuo frame
+  input int nwords,
   input int unsigned w0,             // DATA0 = MSW
   input int unsigned w1,
   input int unsigned w2,
@@ -40,7 +40,7 @@ module bus_sniffer
 
 
   // Memory mapped registers interface signals
-    /* verilator lint_off UNUSED */
+  /* verilator lint_off UNUSED */
   bus_sniffer_reg2hw_t reg2hw;
   bus_sniffer_hw2reg_t hw2reg;
 
@@ -59,7 +59,7 @@ module bus_sniffer
 
   logic enable_gating_reg;
   wire capture_en;
-  assign capture_en = ~debug_mode_i;  // cattura solo fuori dal debug
+  assign capture_en = ~debug_mode_i;  // capture only outside of debug
 
   // Status + data -> HW drives them continuously
   assign hw2reg.sni_status.empty.de       = 1'b1;
@@ -95,6 +95,12 @@ module bus_sniffer
   assign rst_fifo_reg                     = reg2hw.sni_ctrl.rst_fifo;
   assign enable_gating_reg                = reg2hw.sni_ctrl.enable_gating;
 
+
+  // logic dpi_en_sw;
+  // logic dpi_en_eff;
+  // assign dpi_en_sw   = reg2hw.sni_ctrl.dpi_en.q;   // nuovo campo
+  // assign dpi_en_eff  = DPI_ENABLE && dpi_en_sw;    // maschera col parametro (quick kill a build-time)
+
   // SW ack rising-edge detection
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -107,10 +113,11 @@ module bus_sniffer
 
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni)                    frame_pending <= 1'b0;
-    else if (rst_fifo)              frame_pending <= 1'b0;
+    if (!rst_ni)                      frame_pending <= 1'b0;
+    else if (rst_fifo)                frame_pending <= 1'b0;
+    // else if (pop_fifo && !dpi_en_eff) frame_pending <= 1'b1; // <— non settare in DPI
     else if (pop_fifo && !DPI_ENABLE) frame_pending <= 1'b1; // <— non settare in DPI
-    else if (frame_read_rise)       frame_pending <= 1'b0;
+    else if (frame_read_rise)         frame_pending <= 1'b0;
   end
   //--------------------------------------------------------------------------
   // timestamp; only use the lower 16 bits
@@ -143,8 +150,6 @@ module bus_sniffer
   end
   // Reset logic
   assign rst_fifo = (debug_mode_i) ? (rst_fifo_reg_ff || !rst_ni) : rst_fifo_reg || !rst_ni;
-
-
 
   fifo_bus_sniffer #(
       .DATA_WIDTH(FRAME_WIDTH),
@@ -578,6 +583,7 @@ always_ff @(posedge clk_i or negedge rst_ni) begin
 
     // (1) Drain DPI: push to consumer C, then pop if pushed succesfully
     /* verilator lint_off SYNCASYNCNET */
+    // if (dpi_en_eff /*&& !debug_mode_i*/ && !empty) begin
     if (DPI_ENABLE /*&& !debug_mode_i*/ && !empty) begin
       int pushed;
       pushed = sniffer_dpi_push(

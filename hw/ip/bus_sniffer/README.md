@@ -203,7 +203,7 @@ From the **sim-verilator** directory:
 
 ```bash
 # Tail DPI file and pretty-print frames (no MMIO draining):
-../../../test/verifheep/sniffer_dpi.py \
+../../../test/bus_sniffer/sniffer_dpi.py \
   --mode dpi \
   --elf /absolute/path/to/sw/build/main.elf \
   --gdb /absolute/path/to/riscv32-unknown-elf-gdb \
@@ -214,7 +214,7 @@ From the **sim-verilator** directory:
 Legacy (register-drain) mode, if you need it:
 
 ```bash
-../../../test/verifheep/sniffer_dpi.py --mode legacy \
+../../../test/bus_sniffer/sniffer_dpi.py --mode legacy \
   --elf /absolute/path/to/sw/build/main.elf \
   --gdb /absolute/path/to/riscv32-unknown-elf-gdb
 ```
@@ -245,16 +245,18 @@ Legacy (register-drain) mode, if you need it:
 
 ---
 
-## One-shot: Everything in 7 commands
+## One-shot: Everything with the following commands
 
 ```bash
 # fresh upstream clone
 git clone https://github.com/esl-epfl/x-heep.git
 cd x-heep
+git checkout feature-bus-sniffer
 git worktree add ../x-heep-apply $(cat hw/ip/bus_sniffer/patches/BASE_COMMIT)
 cd ../x-heep-apply
 git apply --whitespace=fix ../x-heep/hw/ip/bus_sniffer/patches/x-heep-bus-sniffer.patch
 (cd hw/ip/bus_sniffer && ./bus_sniffer.sh)
+make mcu-gen
 make verilator-sim FUSESOC_PARAM="--JTAG_DPI=1"
 make app PROJECT=example_asm
 make run-app-verilator PROJECT=example_asm

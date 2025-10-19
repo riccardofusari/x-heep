@@ -16,6 +16,7 @@
         { bits: "1",   name: "RST_FIFO",      desc: "Reset FIFO buffer" }
         { bits: "2",   name: "FRAME_READ",    desc: "Frame Stored", hwaccess: "hrw" }
         { bits: "3",   name: "ENABLE_GATING", desc: "Enable the clock gating" }
+        { bits: "4",   name: "DPI_EN",        desc: "Enable DPI streaming (1=on, 0=off)", resval: "0" }
       ]
     }
     {
