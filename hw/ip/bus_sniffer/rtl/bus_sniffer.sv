@@ -96,10 +96,10 @@ module bus_sniffer
   assign enable_gating_reg                = reg2hw.sni_ctrl.enable_gating;
 
 
-  // logic dpi_en_sw;
-  // logic dpi_en_eff;
-  // assign dpi_en_sw   = reg2hw.sni_ctrl.dpi_en.q;   // nuovo campo
-  // assign dpi_en_eff  = DPI_ENABLE && dpi_en_sw;    // maschera col parametro (quick kill a build-time)
+  logic dpi_en_sw;
+  logic dpi_en_eff;
+  assign dpi_en_sw   = reg2hw.sni_ctrl.dpi_en.q;   // nuovo campo
+  assign dpi_en_eff  = DPI_ENABLE && dpi_en_sw;    // maschera col parametro (quick kill a build-time)
 
   // SW ack rising-edge detection
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -115,8 +115,8 @@ module bus_sniffer
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)                      frame_pending <= 1'b0;
     else if (rst_fifo)                frame_pending <= 1'b0;
-    // else if (pop_fifo && !dpi_en_eff) frame_pending <= 1'b1; // <— non settare in DPI
-    else if (pop_fifo && !DPI_ENABLE) frame_pending <= 1'b1; // <— non settare in DPI
+    else if (pop_fifo && !dpi_en_eff) frame_pending <= 1'b1; // <— non settare in DPI
+    // else if (pop_fifo && !DPI_ENABLE) frame_pending <= 1'b1; // <— non settare in DPI
     else if (frame_read_rise)         frame_pending <= 1'b0;
   end
   //--------------------------------------------------------------------------
@@ -583,8 +583,8 @@ always_ff @(posedge clk_i or negedge rst_ni) begin
 
     // (1) Drain DPI: push to consumer C, then pop if pushed succesfully
     /* verilator lint_off SYNCASYNCNET */
-    // if (dpi_en_eff /*&& !debug_mode_i*/ && !empty) begin
-    if (DPI_ENABLE /*&& !debug_mode_i*/ && !empty) begin
+    if (dpi_en_eff /*&& !debug_mode_i*/ && !empty) begin
+    // if (DPI_ENABLE /*&& !debug_mode_i*/ && !empty) begin
       int pushed;
       pushed = sniffer_dpi_push(
         DPI_STREAM_ID, 4,

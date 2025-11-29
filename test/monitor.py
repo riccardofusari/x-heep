@@ -1,0 +1,382 @@
+# Save this as monitor.py
+import csv
+import struct
+from enum import Enum
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+
+class BusSource(Enum):
+    CORE_INSTR = 1
+    CORE_DATA = 2
+    AO_PERIPH = 3
+    PERIPH = 4
+    DMA_READ = 8
+    DMA_WRITE = 9
+
+class TransactionType(Enum):
+    READ = "READ"
+    WRITE = "WRITE"
+
+@dataclass
+class BusTransaction:
+    timestamp: int
+    source: BusSource
+    address: int
+    data: int
+    transaction_type: TransactionType
+    byte_enable: int
+    channel: str
+    req_ts: int  # Request timestamp
+    resp_ts: int  # Response timestamp
+    
+    def __str__(self):
+        return (f"Transaction(req_ts={self.req_ts}, resp_ts={self.resp_ts}, src={self.channel}, "
+                f"addr=0x{self.address:08x}, data=0x{self.data:08x}, "
+                f"type={self.transaction_type.value})")
+
+class BusMonitor:
+    def __init__(self):
+        self.transactions: List[BusTransaction] = []
+        self.source_mapping = {
+            1: ("CORE_INSTR", BusSource.CORE_INSTR),
+            2: ("CORE_DATA", BusSource.CORE_DATA),
+            3: ("AO_PERIPH", BusSource.AO_PERIPH),
+            4: ("PERIPH", BusSource.PERIPH),
+            8: ("DMA_READ", BusSource.DMA_READ),
+            9: ("DMA_WRITE", BusSource.DMA_WRITE)
+        }
+    
+    def parse_csv(self, csv_file_path: str) -> List[BusTransaction]:
+        """
+        Parse CSV output from bus sniffer with proper timing support
+        """
+        print(f"📊 Parsing bus sniffer CSV: {csv_file_path}")
+        self.transactions = []
+        
+        try:
+            with open(csv_file_path, 'r') as file:
+                csv_reader = csv.reader(file)
+                
+                # Read and analyze header
+                headers = next(csv_reader)
+                print(f"📋 CSV Header: {headers}")
+                
+                successful_parses = 0
+                failed_parses = 0
+                
+                for row_num, row in enumerate(csv_reader, 2):
+                    transaction = self._parse_sniffer_row(row, row_num)
+                    if transaction:
+                        self.transactions.append(transaction)
+                        successful_parses += 1
+                    else:
+                        failed_parses += 1
+                        if failed_parses <= 5 and row_num <= 10:
+                            print(f"⚠️  Failed to parse row {row_num}: {row}")
+                
+                print(f"✅ Successfully parsed {successful_parses} transactions")
+                if failed_parses > 0:
+                    print(f"⚠️  Failed to parse {failed_parses} rows")
+                
+                return self.transactions
+            
+        except FileNotFoundError:
+            print(f"❌ CSV file not found: {csv_file_path}")
+            return []
+        except Exception as e:
+            print(f"❌ Error parsing CSV: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def _parse_sniffer_row(self, row: List[str], row_num: int) -> Optional[BusTransaction]:
+        """Parse a row from the sniffer CSV with proper timing"""
+        if len(row) < 9:
+            return None
+        
+        try:
+            # Based on your CSV format: ['src', 'req_ts', 'resp_ts', 'address', 'data', 'be', 'we', 'valid', 'gnt']
+            src_value = int(row[0])
+            req_ts = int(row[1])  # Request timestamp
+            resp_ts = int(row[2])  # Response timestamp
+            address = int(row[3], 16)  # Address in hex
+            data = int(row[4], 16)     # Data in hex
+            be_str = row[5]            # Byte enable (hex)
+            we_str = row[6]            # Write enable
+            valid = int(row[7])        # Valid flag
+            gnt = int(row[8])          # Grant flag
+            
+            # Only process valid transactions
+            if valid != 1 or gnt != 1:
+                return None
+            
+            # Parse byte enable (F means all bytes)
+            if be_str.upper() == 'F':
+                be = 0xF
+            else:
+                be = int(be_str, 16)
+            
+            # Parse write enable
+            we = self._parse_write_enable(we_str)
+            
+            # Map source value to channel
+            if src_value in self.source_mapping:
+                channel_name, source_enum = self.source_mapping[src_value]
+            else:
+                channel_name = f"UNKNOWN_{src_value}"
+                source_enum = BusSource(src_value)
+            
+            transaction_type = TransactionType.WRITE if we == 1 else TransactionType.READ
+            
+            # Use request timestamp as main timestamp
+            timestamp = req_ts
+            
+            return BusTransaction(
+                timestamp=timestamp,
+                source=source_enum,
+                address=address,
+                data=data,
+                transaction_type=transaction_type,
+                byte_enable=be,
+                channel=channel_name,
+                req_ts=req_ts,
+                resp_ts=resp_ts
+            )
+            
+        except (ValueError, IndexError) as e:
+            if row_num <= 10:  # Only show first 10 errors
+                print(f"⚠️  Error parsing row {row_num}: {e}")
+            return None
+    
+    def _parse_write_enable(self, we_str: str) -> int:
+        """Parse write enable from string"""
+        if not we_str:
+            return 0
+        
+        we_str = we_str.upper()
+        if we_str in ['1', 'W', 'WRITE']:
+            return 1
+        elif we_str in ['0', 'R', 'READ']:
+            return 0
+        else:
+            try:
+                return int(we_str)
+            except ValueError:
+                return 0
+    
+    def filter_by_time_range(self, start_time: int, end_time: Optional[int] = None) -> List[BusTransaction]:
+        """Filter transactions by request timestamp range"""
+        if end_time is None:
+            filtered = [t for t in self.transactions if t.req_ts >= start_time]
+        else:
+            filtered = [t for t in self.transactions if start_time <= t.req_ts <= end_time]
+        
+        print(f"⏰ Filtered to {len(filtered)} transactions from req_ts={start_time}" + 
+              (f" to {end_time}" if end_time else " onwards"))
+        return filtered
+    
+    def filter_by_response_time(self, start_time: int, end_time: Optional[int] = None) -> List[BusTransaction]:
+        """Filter transactions by response timestamp range"""
+        if end_time is None:
+            filtered = [t for t in self.transactions if t.resp_ts >= start_time]
+        else:
+            filtered = [t for t in self.transactions if start_time <= t.resp_ts <= end_time]
+        
+        print(f"⏰ Filtered to {len(filtered)} transactions from resp_ts={start_time}" + 
+              (f" to {end_time}" if end_time else " onwards"))
+        return filtered
+    
+    def find_sba_transactions(self, sba_start_time: int) -> List[BusTransaction]:
+        """
+        Find transactions that likely correspond to SBA operations
+        SBA transactions typically come from PERIPH source after a certain time
+        """
+        # SBA transactions usually come from PERIPH source and happen after SBA start
+        sba_candidates = []
+        
+        for transaction in self.transactions:
+            if (transaction.req_ts >= sba_start_time and 
+                transaction.channel == "PERIPH" and
+                transaction.transaction_type == TransactionType.WRITE):
+                sba_candidates.append(transaction)
+        
+        print(f"🔍 Found {len(sba_candidates)} potential SBA transactions after req_ts={sba_start_time}")
+        return sba_candidates
+    
+    def get_time_statistics(self) -> Dict[str, Any]:
+        """Get timing statistics about transactions"""
+        if not self.transactions:
+            return {}
+        
+        req_times = [t.req_ts for t in self.transactions]
+        resp_times = [t.resp_ts for t in self.transactions]
+        
+        return {
+            "req_ts_range": {
+                "min": min(req_times),
+                "max": max(req_times),
+                "avg": sum(req_times) // len(req_times)
+            },
+            "resp_ts_range": {
+                "min": min(resp_times),
+                "max": max(resp_times),
+                "avg": sum(resp_times) // len(resp_times)
+            },
+            "latency_stats": {
+                "min": min(t.resp_ts - t.req_ts for t in self.transactions),
+                "max": max(t.resp_ts - t.req_ts for t in self.transactions),
+                "avg": sum(t.resp_ts - t.req_ts for t in self.transactions) // len(self.transactions)
+            }
+        }
+    
+    def print_timing_statistics(self):
+        """Print timing statistics"""
+        stats = self.get_time_statistics()
+        
+        if not stats:
+            print("⏰ No timing data available")
+            return
+        
+        print("\n" + "="*60)
+        print("⏰ TIMING STATISTICS")
+        print("="*60)
+        print(f"Request Timestamp Range: {stats['req_ts_range']['min']} - {stats['req_ts_range']['max']}")
+        print(f"Response Timestamp Range: {stats['resp_ts_range']['min']} - {stats['resp_ts_range']['max']}")
+        print(f"Average Latency (resp_ts - req_ts): {stats['latency_stats']['avg']} cycles")
+        print(f"Min/Max Latency: {stats['latency_stats']['min']} / {stats['latency_stats']['max']} cycles")
+        print("="*60)
+
+    # ... [keep all the existing methods like filter_by_channel, filter_by_address_range, etc.] ...
+
+    def filter_by_channel(self, channels: List[str]) -> List[BusTransaction]:
+        """Filter transactions by source channel"""
+        filtered = [t for t in self.transactions if t.channel in channels]
+        print(f"🔍 Filtered to {len(filtered)} transactions from channels: {channels}")
+        return filtered
+    
+    def filter_by_address_range(self, start_addr: int, end_addr: int) -> List[BusTransaction]:
+        """Filter transactions by address range"""
+        filtered = [t for t in self.transactions if start_addr <= t.address <= end_addr]
+        print(f"🔍 Filtered to {len(filtered)} transactions in address range 0x{start_addr:08x}-0x{end_addr:08x}")
+        return filtered
+    
+    def filter_by_type(self, transaction_type: TransactionType) -> List[BusTransaction]:
+        """Filter transactions by type (READ/WRITE)"""
+        filtered = [t for t in self.transactions if t.transaction_type == transaction_type]
+        print(f"🔍 Filtered to {len(filtered)} {transaction_type.value} transactions")
+        return filtered
+    
+    def get_transaction_statistics(self) -> Dict[str, Any]:
+        """Get statistics about captured transactions"""
+        if not self.transactions:
+            return {}
+        
+        stats = {
+            "total_transactions": len(self.transactions),
+            "read_count": len(self.filter_by_type(TransactionType.READ)),
+            "write_count": len(self.filter_by_type(TransactionType.WRITE)),
+            "channels": {},
+            "address_range": {
+                "min": min(t.address for t in self.transactions),
+                "max": max(t.address for t in self.transactions)
+            }
+        }
+        
+        for transaction in self.transactions:
+            channel = transaction.channel
+            if channel not in stats["channels"]:
+                stats["channels"][channel] = 0
+            stats["channels"][channel] += 1
+        
+        return stats
+    
+    def print_statistics(self):
+        """Print formatted statistics"""
+        stats = self.get_transaction_statistics()
+        
+        if not stats:
+            print("📊 No transactions to analyze")
+            return
+        
+        print("\n" + "="*60)
+        print("📊 BUS SNIFFER STATISTICS")
+        print("="*60)
+        print(f"Total Transactions: {stats['total_transactions']}")
+        print(f"Read Operations: {stats['read_count']}")
+        print(f"Write Operations: {stats['write_count']}")
+        print(f"Address Range: 0x{stats['address_range']['min']:08x} - 0x{stats['address_range']['max']:08x}")
+        
+        print("\nTransactions by Channel:")
+        for channel, count in stats['channels'].items():
+            print(f"  {channel}: {count} transactions")
+        print("="*60)
+    
+    def find_transactions(self, address: Optional[int] = None, 
+                         data: Optional[int] = None,
+                         channel: Optional[str] = None,
+                         transaction_type: Optional[TransactionType] = None,
+                         min_req_ts: Optional[int] = None) -> List[BusTransaction]:
+        """Find transactions matching specific criteria including timing"""
+        results = self.transactions
+        
+        if address is not None:
+            results = [t for t in results if t.address == address]
+        if data is not None:
+            results = [t for t in results if t.data == data]
+        if channel is not None:
+            results = [t for t in results if t.channel == channel]
+        if transaction_type is not None:
+            results = [t for t in results if t.transaction_type == transaction_type]
+        if min_req_ts is not None:
+            results = [t for t in results if t.req_ts >= min_req_ts]
+        
+        return results
+    
+    def export_to_csv(self, output_file: str):
+        """Export transactions to CSV file"""
+        if not self.transactions:
+            print("❌ No transactions to export")
+            return False
+        
+        try:
+            with open(output_file, 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['req_ts', 'resp_ts', 'channel', 'source', 'address', 'data', 'type', 'byte_enable'])
+                
+                for transaction in self.transactions:
+                    writer.writerow([
+                        transaction.req_ts,
+                        transaction.resp_ts,
+                        transaction.channel,
+                        transaction.source.value,
+                        f"0x{transaction.address:08x}",
+                        f"0x{transaction.data:08x}",
+                        transaction.transaction_type.value,
+                        transaction.byte_enable
+                    ])
+            
+            print(f"✅ Transactions exported to {output_file}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error exporting to CSV: {e}")
+            return False
+    
+    def print_transactions(self, limit: int = 20, min_req_ts: Optional[int] = None):
+        """Print first N transactions, optionally filtered by time"""
+        transactions_to_show = self.transactions
+        if min_req_ts is not None:
+            transactions_to_show = [t for t in transactions_to_show if t.req_ts >= min_req_ts]
+        
+        if not transactions_to_show:
+            print("❌ No transactions to display")
+            return
+        
+        time_filter_msg = f" (after req_ts={min_req_ts})" if min_req_ts else ""
+        print(f"\n📋 First {min(limit, len(transactions_to_show))} transactions{time_filter_msg}:")
+        print("-" * 100)
+        for i, transaction in enumerate(transactions_to_show[:limit]):
+            print(f"{i+1:3d}. {transaction}")
+        
+        if len(transactions_to_show) > limit:
+            print(f"... and {len(transactions_to_show) - limit} more transactions")
