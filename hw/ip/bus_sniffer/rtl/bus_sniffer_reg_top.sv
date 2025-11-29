@@ -8,44 +8,44 @@
 `include "common_cells/assertions.svh"
 
 module bus_sniffer_reg_top #(
-  parameter type reg_req_t = logic,
-  parameter type reg_rsp_t = logic,
-  parameter int AW = 5
+    parameter type reg_req_t = logic,
+    parameter type reg_rsp_t = logic,
+    parameter int AW = 5
 ) (
-  input logic clk_i,
-  input logic rst_ni,
-  input  reg_req_t reg_req_i,
-  output reg_rsp_t reg_rsp_o,
-  // To HW
-  output bus_sniffer_reg_pkg::bus_sniffer_reg2hw_t reg2hw, // Write
-  input  bus_sniffer_reg_pkg::bus_sniffer_hw2reg_t hw2reg, // Read
+    input logic clk_i,
+    input logic rst_ni,
+    input reg_req_t reg_req_i,
+    output reg_rsp_t reg_rsp_o,
+    // To HW
+    output bus_sniffer_reg_pkg::bus_sniffer_reg2hw_t reg2hw,  // Write
+    input bus_sniffer_reg_pkg::bus_sniffer_hw2reg_t hw2reg,  // Read
 
 
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+    // Config
+    input devmode_i  // If 1, explicit error return for unmapped register access
 );
 
-  import bus_sniffer_reg_pkg::* ;
+  import bus_sniffer_reg_pkg::*;
 
   localparam int DW = 32;
-  localparam int DBW = DW/8;                    // Byte Width
+  localparam int DBW = DW / 8;  // Byte Width
 
   // register signals
   logic           reg_we;
   logic           reg_re;
-  logic [AW-1:0]  reg_addr;
-  logic [DW-1:0]  reg_wdata;
+  logic [ AW-1:0] reg_addr;
+  logic [ DW-1:0] reg_wdata;
   logic [DBW-1:0] reg_be;
-  logic [DW-1:0]  reg_rdata;
+  logic [ DW-1:0] reg_rdata;
   logic           reg_error;
 
-  logic          addrmiss, wr_err;
+  logic addrmiss, wr_err;
 
   logic [DW-1:0] reg_rdata_next;
 
   // Below register interface can be changed
-  reg_req_t  reg_intf_req;
-  reg_rsp_t  reg_intf_rsp;
+  reg_req_t reg_intf_req;
+  reg_rsp_t reg_intf_rsp;
 
 
   assign reg_intf_req = reg_req_i;
@@ -54,7 +54,7 @@ module bus_sniffer_reg_top #(
 
   assign reg_we = reg_intf_req.valid & reg_intf_req.write;
   assign reg_re = reg_intf_req.valid & ~reg_intf_req.write;
-/* verilator lint_off WIDTH */
+  /* verilator lint_off WIDTH */
   assign reg_addr = reg_intf_req.addr;
   assign reg_wdata = reg_intf_req.wdata;
   assign reg_be = reg_intf_req.wstrb;
@@ -62,7 +62,7 @@ module bus_sniffer_reg_top #(
   assign reg_intf_rsp.error = reg_error;
   assign reg_intf_rsp.ready = 1'b1;
 
-  assign reg_rdata = reg_rdata_next ;
+  assign reg_rdata = reg_rdata_next;
   assign reg_error = (devmode_i & addrmiss) | wr_err;
 
 
@@ -97,131 +97,131 @@ module bus_sniffer_reg_top #(
 
   //   F[en]: 0:0
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RW"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RW"),
+      .RESVAL  (1'h0)
   ) u_sni_ctrl_en (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    // from register interface
-    .we     (sni_ctrl_en_we),
-    .wd     (sni_ctrl_en_wd),
+      // from register interface
+      .we(sni_ctrl_en_we),
+      .wd(sni_ctrl_en_wd),
 
-    // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+      // from internal hardware
+      .de(1'b0),
+      .d ('0),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_ctrl.en.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_ctrl.en.q),
 
-    // to register interface (read)
-    .qs     (sni_ctrl_en_qs)
+      // to register interface (read)
+      .qs(sni_ctrl_en_qs)
   );
 
 
   //   F[rst_fifo]: 1:1
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RW"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RW"),
+      .RESVAL  (1'h0)
   ) u_sni_ctrl_rst_fifo (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    // from register interface
-    .we     (sni_ctrl_rst_fifo_we),
-    .wd     (sni_ctrl_rst_fifo_wd),
+      // from register interface
+      .we(sni_ctrl_rst_fifo_we),
+      .wd(sni_ctrl_rst_fifo_wd),
 
-    // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+      // from internal hardware
+      .de(1'b0),
+      .d ('0),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_ctrl.rst_fifo.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_ctrl.rst_fifo.q),
 
-    // to register interface (read)
-    .qs     (sni_ctrl_rst_fifo_qs)
+      // to register interface (read)
+      .qs(sni_ctrl_rst_fifo_qs)
   );
 
 
   //   F[frame_read]: 2:2
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RW"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RW"),
+      .RESVAL  (1'h0)
   ) u_sni_ctrl_frame_read (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    // from register interface
-    .we     (sni_ctrl_frame_read_we),
-    .wd     (sni_ctrl_frame_read_wd),
+      // from register interface
+      .we(sni_ctrl_frame_read_we),
+      .wd(sni_ctrl_frame_read_wd),
 
-    // from internal hardware
-    .de     (hw2reg.sni_ctrl.frame_read.de),
-    .d      (hw2reg.sni_ctrl.frame_read.d ),
+      // from internal hardware
+      .de(hw2reg.sni_ctrl.frame_read.de),
+      .d (hw2reg.sni_ctrl.frame_read.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_ctrl.frame_read.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_ctrl.frame_read.q),
 
-    // to register interface (read)
-    .qs     (sni_ctrl_frame_read_qs)
+      // to register interface (read)
+      .qs(sni_ctrl_frame_read_qs)
   );
 
 
   //   F[enable_gating]: 3:3
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RW"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RW"),
+      .RESVAL  (1'h0)
   ) u_sni_ctrl_enable_gating (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    // from register interface
-    .we     (sni_ctrl_enable_gating_we),
-    .wd     (sni_ctrl_enable_gating_wd),
+      // from register interface
+      .we(sni_ctrl_enable_gating_we),
+      .wd(sni_ctrl_enable_gating_wd),
 
-    // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+      // from internal hardware
+      .de(1'b0),
+      .d ('0),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_ctrl.enable_gating.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_ctrl.enable_gating.q),
 
-    // to register interface (read)
-    .qs     (sni_ctrl_enable_gating_qs)
+      // to register interface (read)
+      .qs(sni_ctrl_enable_gating_qs)
   );
 
 
   //   F[dpi_en]: 4:4
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RW"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RW"),
+      .RESVAL  (1'h1)
   ) u_sni_ctrl_dpi_en (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    // from register interface
-    .we     (sni_ctrl_dpi_en_we),
-    .wd     (sni_ctrl_dpi_en_wd),
+      // from register interface
+      .we(sni_ctrl_dpi_en_we),
+      .wd(sni_ctrl_dpi_en_wd),
 
-    // from internal hardware
-    .de     (1'b0),
-    .d      ('0  ),
+      // from internal hardware
+      .de(1'b0),
+      .d ('0),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_ctrl.dpi_en.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_ctrl.dpi_en.q),
 
-    // to register interface (read)
-    .qs     (sni_ctrl_dpi_en_qs)
+      // to register interface (read)
+      .qs(sni_ctrl_dpi_en_qs)
   );
 
 
@@ -229,180 +229,180 @@ module bus_sniffer_reg_top #(
 
   //   F[empty]: 0:0
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RO"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RO"),
+      .RESVAL  (1'h0)
   ) u_sni_status_empty (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    .we     (1'b0),
-    .wd     ('0  ),
+      .we(1'b0),
+      .wd('0),
 
-    // from internal hardware
-    .de     (hw2reg.sni_status.empty.de),
-    .d      (hw2reg.sni_status.empty.d ),
+      // from internal hardware
+      .de(hw2reg.sni_status.empty.de),
+      .d (hw2reg.sni_status.empty.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_status.empty.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_status.empty.q),
 
-    // to register interface (read)
-    .qs     (sni_status_empty_qs)
+      // to register interface (read)
+      .qs(sni_status_empty_qs)
   );
 
 
   //   F[full]: 1:1
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RO"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RO"),
+      .RESVAL  (1'h0)
   ) u_sni_status_full (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    .we     (1'b0),
-    .wd     ('0  ),
+      .we(1'b0),
+      .wd('0),
 
-    // from internal hardware
-    .de     (hw2reg.sni_status.full.de),
-    .d      (hw2reg.sni_status.full.d ),
+      // from internal hardware
+      .de(hw2reg.sni_status.full.de),
+      .d (hw2reg.sni_status.full.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_status.full.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_status.full.q),
 
-    // to register interface (read)
-    .qs     (sni_status_full_qs)
+      // to register interface (read)
+      .qs(sni_status_full_qs)
   );
 
 
   //   F[frame_avail]: 2:2
   prim_subreg #(
-    .DW      (1),
-    .SWACCESS("RO"),
-    .RESVAL  (1'h0)
+      .DW      (1),
+      .SWACCESS("RO"),
+      .RESVAL  (1'h0)
   ) u_sni_status_frame_avail (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    .we     (1'b0),
-    .wd     ('0  ),
+      .we(1'b0),
+      .wd('0),
 
-    // from internal hardware
-    .de     (hw2reg.sni_status.frame_avail.de),
-    .d      (hw2reg.sni_status.frame_avail.d ),
+      // from internal hardware
+      .de(hw2reg.sni_status.frame_avail.de),
+      .d (hw2reg.sni_status.frame_avail.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_status.frame_avail.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_status.frame_avail.q),
 
-    // to register interface (read)
-    .qs     (sni_status_frame_avail_qs)
+      // to register interface (read)
+      .qs(sni_status_frame_avail_qs)
   );
 
 
   // R[sni_data0]: V(False)
 
   prim_subreg #(
-    .DW      (32),
-    .SWACCESS("RO"),
-    .RESVAL  (32'h0)
+      .DW      (32),
+      .SWACCESS("RO"),
+      .RESVAL  (32'h0)
   ) u_sni_data0 (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    .we     (1'b0),
-    .wd     ('0  ),
+      .we(1'b0),
+      .wd('0),
 
-    // from internal hardware
-    .de     (hw2reg.sni_data0.de),
-    .d      (hw2reg.sni_data0.d ),
+      // from internal hardware
+      .de(hw2reg.sni_data0.de),
+      .d (hw2reg.sni_data0.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_data0.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_data0.q),
 
-    // to register interface (read)
-    .qs     (sni_data0_qs)
+      // to register interface (read)
+      .qs(sni_data0_qs)
   );
 
 
   // R[sni_data1]: V(False)
 
   prim_subreg #(
-    .DW      (32),
-    .SWACCESS("RO"),
-    .RESVAL  (32'h0)
+      .DW      (32),
+      .SWACCESS("RO"),
+      .RESVAL  (32'h0)
   ) u_sni_data1 (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    .we     (1'b0),
-    .wd     ('0  ),
+      .we(1'b0),
+      .wd('0),
 
-    // from internal hardware
-    .de     (hw2reg.sni_data1.de),
-    .d      (hw2reg.sni_data1.d ),
+      // from internal hardware
+      .de(hw2reg.sni_data1.de),
+      .d (hw2reg.sni_data1.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_data1.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_data1.q),
 
-    // to register interface (read)
-    .qs     (sni_data1_qs)
+      // to register interface (read)
+      .qs(sni_data1_qs)
   );
 
 
   // R[sni_data2]: V(False)
 
   prim_subreg #(
-    .DW      (32),
-    .SWACCESS("RO"),
-    .RESVAL  (32'h0)
+      .DW      (32),
+      .SWACCESS("RO"),
+      .RESVAL  (32'h0)
   ) u_sni_data2 (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    .we     (1'b0),
-    .wd     ('0  ),
+      .we(1'b0),
+      .wd('0),
 
-    // from internal hardware
-    .de     (hw2reg.sni_data2.de),
-    .d      (hw2reg.sni_data2.d ),
+      // from internal hardware
+      .de(hw2reg.sni_data2.de),
+      .d (hw2reg.sni_data2.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_data2.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_data2.q),
 
-    // to register interface (read)
-    .qs     (sni_data2_qs)
+      // to register interface (read)
+      .qs(sni_data2_qs)
   );
 
 
   // R[sni_data3]: V(False)
 
   prim_subreg #(
-    .DW      (32),
-    .SWACCESS("RO"),
-    .RESVAL  (32'h0)
+      .DW      (32),
+      .SWACCESS("RO"),
+      .RESVAL  (32'h0)
   ) u_sni_data3 (
-    .clk_i   (clk_i    ),
-    .rst_ni  (rst_ni  ),
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
 
-    .we     (1'b0),
-    .wd     ('0  ),
+      .we(1'b0),
+      .wd('0),
 
-    // from internal hardware
-    .de     (hw2reg.sni_data3.de),
-    .d      (hw2reg.sni_data3.d ),
+      // from internal hardware
+      .de(hw2reg.sni_data3.de),
+      .d (hw2reg.sni_data3.d),
 
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.sni_data3.q ),
+      // to internal hardware
+      .qe(),
+      .q (reg2hw.sni_data3.q),
 
-    // to register interface (read)
-    .qs     (sni_data3_qs)
+      // to register interface (read)
+      .qs(sni_data3_qs)
   );
 
 
@@ -419,7 +419,7 @@ module bus_sniffer_reg_top #(
     addr_hit[5] = (reg_addr == BUS_SNIFFER_SNI_DATA3_OFFSET);
   end
 
-  assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
+  assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0;
 
   // Check sub-word write is permitted
   always_comb begin
@@ -502,24 +502,23 @@ module bus_sniffer_reg_top #(
 endmodule
 
 /* verilator lint_off DECLFILENAME */
-module bus_sniffer_reg_top_intf
-#(
-  parameter int AW = 5,
-  localparam int DW = 32
+module bus_sniffer_reg_top_intf #(
+    parameter  int AW = 5,
+    localparam int DW = 32
 ) (
-  input logic clk_i,
-  input logic rst_ni,
-  REG_BUS.in  regbus_slave,
-  // To HW
-  output bus_sniffer_reg_pkg::bus_sniffer_reg2hw_t reg2hw, // Write
-  input  bus_sniffer_reg_pkg::bus_sniffer_hw2reg_t hw2reg, // Read
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+    input logic clk_i,
+    input logic rst_ni,
+    REG_BUS.in regbus_slave,
+    // To HW
+    output bus_sniffer_reg_pkg::bus_sniffer_reg2hw_t reg2hw,  // Write
+    input bus_sniffer_reg_pkg::bus_sniffer_hw2reg_t hw2reg,  // Read
+    // Config
+    input devmode_i  // If 1, explicit error return for unmapped register access
 );
- localparam int unsigned STRB_WIDTH = DW/8;
+  localparam int unsigned STRB_WIDTH = DW / 8;
 
-`include "register_interface/typedef.svh"
-`include "register_interface/assign.svh"
+  `include "register_interface/typedef.svh"
+  `include "register_interface/assign.svh"
 
   // Define structs for reg_bus
   typedef logic [AW-1:0] addr_t;
@@ -529,27 +528,27 @@ module bus_sniffer_reg_top_intf
 
   reg_bus_req_t s_reg_req;
   reg_bus_rsp_t s_reg_rsp;
-  
+
   // Assign SV interface to structs
   `REG_BUS_ASSIGN_TO_REQ(s_reg_req, regbus_slave)
   `REG_BUS_ASSIGN_FROM_RSP(regbus_slave, s_reg_rsp)
 
-  
+
 
   bus_sniffer_reg_top #(
-    .reg_req_t(reg_bus_req_t),
-    .reg_rsp_t(reg_bus_rsp_t),
-    .AW(AW)
+      .reg_req_t(reg_bus_req_t),
+      .reg_rsp_t(reg_bus_rsp_t),
+      .AW(AW)
   ) i_regs (
-    .clk_i,
-    .rst_ni,
-    .reg_req_i(s_reg_req),
-    .reg_rsp_o(s_reg_rsp),
-    .reg2hw, // Write
-    .hw2reg, // Read
-    .devmode_i
+      .clk_i,
+      .rst_ni,
+      .reg_req_i(s_reg_req),
+      .reg_rsp_o(s_reg_rsp),
+      .reg2hw,  // Write
+      .hw2reg,  // Read
+      .devmode_i
   );
-  
+
 endmodule
 
 
