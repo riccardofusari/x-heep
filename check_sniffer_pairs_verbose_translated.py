@@ -1,39 +1,52 @@
 import csv
+import json
 
 # Path to your sniffer CSV file
 CSV_PATH = "build/openhwgroup.org_systems_core-v-mini-mcu_0/sim-verilator/sniffer_frames.csv"
 
-# Define expected (address, data) pairs
+with open("shadow_write_data.json") as f:
+    shadow = json.load(f)
+
+BASE_ADDR = shadow["base_addr"]
+DATA      = shadow["data_words"]
+
+print(f"Loaded {len(DATA)} expected words written at 0x{BASE_ADDR:08X}")
+# Auto-generate (address, data) pairs
 expected_pairs = [
-    # (0x00000000, 0xa5a5a5a5),
-    # (0x00000004, 0x5a5a5a5a),
-    # (0x00000008, 0xf0f0f0f0),
-    # (0x0000000c, 0x0f0f0f0f),
-    # (0x2002fff8, 0xa5a5a5a5),
-    # (0x2002fffc, 0x5a5a5a5a),
-    # (0x20030000, 0xf0f0f0f0),
-    # (0x20030004, 0x0f0f0f0f),
-    # (0x00000ed4, 0xa5a5a5a5),
-    # (0x00000ed8, 0x5a5a5a5a),
-    # (0x00000edc, 0xf0f0f0f0),
-    # (0x00000ee0, 0x0f0f0f0f),
-    (0x00008000, 0x00000000),
-    (0x00008004, 0x11111111),
-    (0x00008008, 0x22222222),
-    (0x0000800c, 0x33333333),
-    (0x00008010, 0x44444444),
-    (0x00008014, 0x55555555),
-    (0x00008018, 0x66666666),
-    (0x0000801c, 0x77777777),
-    (0x00008020, 0x88888888),
-    (0x00008024, 0x99999999),
-    (0x00008028, 0xaaaaaaaa),
-    (0x0000802c, 0xbbbbbbbb),
-    (0x00008030, 0xcccccccc),
-    (0x00008034, 0xdddddddd),
-    (0x00008038, 0xeeeeeeee),
-    (0x0000803c, 0xffffffff),
+    (BASE_ADDR + i * 4, DATA[i])
+    for i in range(len(DATA))
 ]
+# Define expected (address, data) pairs
+# expected_pairs = [
+#     # (0x00000000, 0xa5a5a5a5),
+#     # (0x00000004, 0x5a5a5a5a),
+#     # (0x00000008, 0xf0f0f0f0),
+#     # (0x0000000c, 0x0f0f0f0f),
+#     # (0x2002fff8, 0xa5a5a5a5),
+#     # (0x2002fffc, 0x5a5a5a5a),
+#     # (0x20030000, 0xf0f0f0f0),
+#     # (0x20030004, 0x0f0f0f0f),
+#     # (0x00000ed4, 0xa5a5a5a5),
+#     # (0x00000ed8, 0x5a5a5a5a),
+#     # (0x00000edc, 0xf0f0f0f0),
+#     # (0x00000ee0, 0x0f0f0f0f),
+#     (0x00008000, 0x00000000),
+#     (0x00008004, 0x11111111),
+#     (0x00008008, 0x22222222),
+#     (0x0000800c, 0x33333333),
+#     (0x00008010, 0x44444444),
+#     (0x00008014, 0x55555555),
+#     (0x00008018, 0x66666666),
+#     (0x0000801c, 0x77777777),
+#     (0x00008020, 0x88888888),
+#     (0x00008024, 0x99999999),
+#     (0x00008028, 0xaaaaaaaa),
+#     (0x0000802c, 0xbbbbbbbb),
+#     (0x00008030, 0xcccccccc),
+#     (0x00008034, 0xdddddddd),
+#     (0x00008038, 0xeeeeeeee),
+#     (0x0000803c, 0xffffffff),
+# ]
 
 # Source name translation table
 SRC_MAP = {

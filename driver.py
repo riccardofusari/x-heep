@@ -3,6 +3,7 @@ import socket
 import time
 import struct
 import re
+import json
 from enum import Enum
 
 class BusSource(Enum):
@@ -334,6 +335,14 @@ class XHeepSBADriver:
     def write_burst(self, address, data_list):
         """Write multiple words"""
         success_count = 0
+        # NEW: store written data for later tools/tests
+        shadow = {
+            "base_addr": address,
+            "data_words": data_list
+        }
+
+        with open("shadow_write_data.json", "w") as f:
+            json.dump(shadow, f)
         for i, value in enumerate(data_list):
             try:
                 if self.mode == OperationMode.SBA:

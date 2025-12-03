@@ -5,6 +5,7 @@ from scoreboard import BusScoreboard
 # from driver import performed_sba_writes
 import time
 import os
+import json
 
 def get_user_mode():
     """Ask user for operation mode"""
