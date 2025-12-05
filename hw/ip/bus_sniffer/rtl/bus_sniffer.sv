@@ -21,7 +21,8 @@ module bus_sniffer
     parameter type reg_rsp_t = logic,
     parameter FRAME_WIDTH   = 128,
     parameter FIFO_DEPTH    = 1024,
-    parameter TABLE_DEPTH   = 10,
+    parameter TABLE_DEPTH   = 32,
+    /* verilator lint_off UNUSED */
     parameter NUM_CHANNELS  = 10  // how many bus channels we can monitor
 ) (
     input logic clk_i,
@@ -182,154 +183,59 @@ module bus_sniffer
   // Partial entry table
   partial_entry_t transaction_table[TABLE_DEPTH];
 
-  //  On each clock, capture new requests from each channel
-  //     if req && gnt are high, store them in a free table entry.
-  //     If it's a write, mark the frame as "complete" immediately.
-  //     If it's a read, mark waiting_resp=1.
 
+  // Multi-channel simultaneous request capture
+  // Each channel gets its own slot finder to avoid race conditions
+  
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      // init table by freeing all the elements
       for (int i = 0; i < TABLE_DEPTH; i++) begin
         transaction_table[i].free_slot <= 1'b0;
       end
-
     end else begin
-      // Temp copy of the table to compute next state of all the channels simultaneously
       partial_entry_t table_tmp[TABLE_DEPTH];
 
-      // Copy the elements occupied
+      // Copy current table state
       for (int i = 0; i < TABLE_DEPTH; i++) begin
         table_tmp[i] = transaction_table[i];
       end
 
       //---------------------------------------------------------------
-      // Check all channels in priority order
+      // Process all channels IN PARALLEL
+      // Each channel independently finds a free slot
       //---------------------------------------------------------------
-
-      // Iterate through channels
-      for (int ch = 0; ch < NUM_CHANNELS; ch++) begin
+      
+      // Channel: DMA_READ
+      begin
         logic req, gnt, we;
         logic [31:0] addr, wdata;
         logic [3:0] be;
-        logic [3:0] channel_id;
-
-        // Get signals for current channel
-        case (ch)
-          CH_CORE_INSTR: begin
-            req = bus_sniffer_bundle_i.core_instr_req.req;
-            gnt = bus_sniffer_bundle_i.core_instr_resp.gnt;
-            we = bus_sniffer_bundle_i.core_instr_req.we;
-            addr = bus_sniffer_bundle_i.core_instr_req.addr;
-            wdata = bus_sniffer_bundle_i.core_instr_req.wdata;
-            be = bus_sniffer_bundle_i.core_instr_req.be;
-            channel_id = CORE_INSTR;
-          end
-          CH_CORE_DATA: begin
-            req = bus_sniffer_bundle_i.core_data_req.req;
-            gnt = bus_sniffer_bundle_i.core_data_resp.gnt;
-            we = bus_sniffer_bundle_i.core_data_req.we;
-            addr = bus_sniffer_bundle_i.core_data_req.addr;
-            wdata = bus_sniffer_bundle_i.core_data_req.wdata;
-            be = bus_sniffer_bundle_i.core_data_req.be;
-            channel_id = CORE_DATA;
-          end
-          CH_AO_PERIPH: begin
-            req = bus_sniffer_bundle_i.ao_peripheral_slave_req.req;
-            gnt = bus_sniffer_bundle_i.ao_peripheral_slave_resp.gnt;
-            we = bus_sniffer_bundle_i.ao_peripheral_slave_req.we;
-            addr = bus_sniffer_bundle_i.ao_peripheral_slave_req.addr;
-            wdata = bus_sniffer_bundle_i.ao_peripheral_slave_req.wdata;
-            be = bus_sniffer_bundle_i.ao_peripheral_slave_req.be;
-            channel_id = AO_PERIPH;
-          end
-          CH_PERIPH: begin
-            req = bus_sniffer_bundle_i.peripheral_slave_req.req;
-            gnt = bus_sniffer_bundle_i.peripheral_slave_resp.gnt;
-            we = bus_sniffer_bundle_i.peripheral_slave_req.we;
-            addr = bus_sniffer_bundle_i.peripheral_slave_req.addr;
-            wdata = bus_sniffer_bundle_i.peripheral_slave_req.wdata;
-            be = bus_sniffer_bundle_i.peripheral_slave_req.be;
-            channel_id = PERIPH;
-          end
-          CH_RAM0: begin
-            req = bus_sniffer_bundle_i.ram_slave_req[0].req;
-            gnt = bus_sniffer_bundle_i.ram_slave_resp[0].gnt;
-            we = bus_sniffer_bundle_i.ram_slave_req[0].we;
-            addr = bus_sniffer_bundle_i.ram_slave_req[0].addr;
-            wdata = bus_sniffer_bundle_i.ram_slave_req[0].wdata;
-            be = bus_sniffer_bundle_i.ram_slave_req[0].be;
-            channel_id = RAM0;
-          end
-          CH_RAM1: begin
-            req = bus_sniffer_bundle_i.ram_slave_req[1].req;
-            gnt = bus_sniffer_bundle_i.ram_slave_resp[1].gnt;
-            we = bus_sniffer_bundle_i.ram_slave_req[1].we;
-            addr = bus_sniffer_bundle_i.ram_slave_req[1].addr;
-            wdata = bus_sniffer_bundle_i.ram_slave_req[1].wdata;
-            be = bus_sniffer_bundle_i.ram_slave_req[1].be;
-            channel_id = RAM1;
-          end
-          CH_FLASH: begin
-            req = bus_sniffer_bundle_i.flash_mem_slave_req.req;
-            gnt = bus_sniffer_bundle_i.flash_mem_slave_resp.gnt;
-            we = bus_sniffer_bundle_i.flash_mem_slave_req.we;
-            addr = bus_sniffer_bundle_i.flash_mem_slave_req.addr;
-            wdata = bus_sniffer_bundle_i.flash_mem_slave_req.wdata;
-            be = bus_sniffer_bundle_i.flash_mem_slave_req.be;
-            channel_id = FLASH;
-          end
-          CH_DMA_READ: begin
-            req = bus_sniffer_bundle_i.dma_read_req.req;
-            gnt = bus_sniffer_bundle_i.dma_read_resp.gnt;
-            we = bus_sniffer_bundle_i.dma_read_req.we;
-            addr = bus_sniffer_bundle_i.dma_read_req.addr;
-            wdata = bus_sniffer_bundle_i.dma_read_req.wdata;
-            be = bus_sniffer_bundle_i.dma_read_req.be;
-            channel_id = DMA_READ;
-          end
-          CH_DMA_WRITE: begin
-            req = bus_sniffer_bundle_i.dma_write_req.req;
-            gnt = bus_sniffer_bundle_i.dma_write_resp.gnt;
-            we = bus_sniffer_bundle_i.dma_write_req.we;
-            addr = bus_sniffer_bundle_i.dma_write_req.addr;
-            wdata = bus_sniffer_bundle_i.dma_write_req.wdata;
-            be = bus_sniffer_bundle_i.dma_write_req.be;
-            channel_id = DMA_WRITE;
-          end
-          CH_DMA_ADDR: begin
-            req = bus_sniffer_bundle_i.dma_addr_req.req;
-            gnt = bus_sniffer_bundle_i.dma_addr_resp.gnt;
-            we = bus_sniffer_bundle_i.dma_addr_req.we;
-            addr = bus_sniffer_bundle_i.dma_addr_req.addr;
-            wdata = bus_sniffer_bundle_i.dma_addr_req.wdata;
-            be = bus_sniffer_bundle_i.dma_addr_req.be;
-            channel_id = DMA_ADDR;
-          end
-        endcase
-
-        // If channel request is active and granted, allocate a slot in the table
+        int idx;
+        
+        req = bus_sniffer_bundle_i.dma_read_req.req;
+        gnt = bus_sniffer_bundle_i.dma_read_resp.gnt;
+        we = bus_sniffer_bundle_i.dma_read_req.we;
+        addr = bus_sniffer_bundle_i.dma_read_req.addr;
+        wdata = bus_sniffer_bundle_i.dma_read_req.wdata;
+        be = bus_sniffer_bundle_i.dma_read_req.be;
+        
         if (req && gnt) begin
-          int idx = find_free_slot(table_tmp);  // Use temp table
+          idx = find_free_slot(table_tmp);
           if (idx >= 0) begin
-            // Update temp table (not actual table yet)
             table_tmp[idx].free_slot           = 1'b1;
             table_tmp[idx].waiting_resp        = ~we;
-            table_tmp[idx].channel_id          = channel_id;
-            table_tmp[idx].frame.source_id     = channel_id;
+            table_tmp[idx].channel_id          = DMA_READ;
+            table_tmp[idx].frame.source_id     = DMA_READ;
             table_tmp[idx].frame.req_timestamp = timestamp_q;
             table_tmp[idx].frame.address       = addr;
             table_tmp[idx].frame.byte_enable   = be;
             table_tmp[idx].frame.we            = we;
             table_tmp[idx].frame.valid         = 1'b1;
-            table_tmp[idx].frame.gnt           = 1'b1;  // store handshake
-
+            table_tmp[idx].frame.gnt           = 1'b1;
             if (we) begin
-              // For writes, the data is known right now
               table_tmp[idx].frame.data           = wdata;
               table_tmp[idx].frame.resp_timestamp = 16'h0001;
             end else begin
-              // For reads, data & resp_timestamp come later
               table_tmp[idx].frame.data           = '0;
               table_tmp[idx].frame.resp_timestamp = '0;
             end
@@ -337,12 +243,368 @@ module bus_sniffer
         end
       end
 
+      // Channel: DMA_WRITE
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.dma_write_req.req;
+        gnt = bus_sniffer_bundle_i.dma_write_resp.gnt;
+        we = bus_sniffer_bundle_i.dma_write_req.we;
+        addr = bus_sniffer_bundle_i.dma_write_req.addr;
+        wdata = bus_sniffer_bundle_i.dma_write_req.wdata;
+        be = bus_sniffer_bundle_i.dma_write_req.be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = DMA_WRITE;
+            table_tmp[idx].frame.source_id     = DMA_WRITE;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
 
+      // Channel: DMA_ADDR
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.dma_addr_req.req;
+        gnt = bus_sniffer_bundle_i.dma_addr_resp.gnt;
+        we = bus_sniffer_bundle_i.dma_addr_req.we;
+        addr = bus_sniffer_bundle_i.dma_addr_req.addr;
+        wdata = bus_sniffer_bundle_i.dma_addr_req.wdata;
+        be = bus_sniffer_bundle_i.dma_addr_req.be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = DMA_ADDR;
+            table_tmp[idx].frame.source_id     = DMA_ADDR;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Channel: CORE_INSTR
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.core_instr_req.req;
+        gnt = bus_sniffer_bundle_i.core_instr_resp.gnt;
+        we = bus_sniffer_bundle_i.core_instr_req.we;
+        addr = bus_sniffer_bundle_i.core_instr_req.addr;
+        wdata = bus_sniffer_bundle_i.core_instr_req.wdata;
+        be = bus_sniffer_bundle_i.core_instr_req.be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = CORE_INSTR;
+            table_tmp[idx].frame.source_id     = CORE_INSTR;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Channel: CORE_DATA
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.core_data_req.req;
+        gnt = bus_sniffer_bundle_i.core_data_resp.gnt;
+        we = bus_sniffer_bundle_i.core_data_req.we;
+        addr = bus_sniffer_bundle_i.core_data_req.addr;
+        wdata = bus_sniffer_bundle_i.core_data_req.wdata;
+        be = bus_sniffer_bundle_i.core_data_req.be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = CORE_DATA;
+            table_tmp[idx].frame.source_id     = CORE_DATA;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Channel: AO_PERIPH
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.ao_peripheral_slave_req.req;
+        gnt = bus_sniffer_bundle_i.ao_peripheral_slave_resp.gnt;
+        we = bus_sniffer_bundle_i.ao_peripheral_slave_req.we;
+        addr = bus_sniffer_bundle_i.ao_peripheral_slave_req.addr;
+        wdata = bus_sniffer_bundle_i.ao_peripheral_slave_req.wdata;
+        be = bus_sniffer_bundle_i.ao_peripheral_slave_req.be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = AO_PERIPH;
+            table_tmp[idx].frame.source_id     = AO_PERIPH;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Channel: PERIPH
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.peripheral_slave_req.req;
+        gnt = bus_sniffer_bundle_i.peripheral_slave_resp.gnt;
+        we = bus_sniffer_bundle_i.peripheral_slave_req.we;
+        addr = bus_sniffer_bundle_i.peripheral_slave_req.addr;
+        wdata = bus_sniffer_bundle_i.peripheral_slave_req.wdata;
+        be = bus_sniffer_bundle_i.peripheral_slave_req.be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = PERIPH;
+            table_tmp[idx].frame.source_id     = PERIPH;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Channel: RAM0
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.ram_slave_req[0].req;
+        gnt = bus_sniffer_bundle_i.ram_slave_resp[0].gnt;
+        we = bus_sniffer_bundle_i.ram_slave_req[0].we;
+        addr = bus_sniffer_bundle_i.ram_slave_req[0].addr;
+        wdata = bus_sniffer_bundle_i.ram_slave_req[0].wdata;
+        be = bus_sniffer_bundle_i.ram_slave_req[0].be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = RAM0;
+            table_tmp[idx].frame.source_id     = RAM0;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Channel: RAM1
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.ram_slave_req[1].req;
+        gnt = bus_sniffer_bundle_i.ram_slave_resp[1].gnt;
+        we = bus_sniffer_bundle_i.ram_slave_req[1].we;
+        addr = bus_sniffer_bundle_i.ram_slave_req[1].addr;
+        wdata = bus_sniffer_bundle_i.ram_slave_req[1].wdata;
+        be = bus_sniffer_bundle_i.ram_slave_req[1].be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = RAM1;
+            table_tmp[idx].frame.source_id     = RAM1;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Channel: FLASH
+      begin
+        logic req, gnt, we;
+        logic [31:0] addr, wdata;
+        logic [3:0] be;
+        int idx;
+        
+        req = bus_sniffer_bundle_i.flash_mem_slave_req.req;
+        gnt = bus_sniffer_bundle_i.flash_mem_slave_resp.gnt;
+        we = bus_sniffer_bundle_i.flash_mem_slave_req.we;
+        addr = bus_sniffer_bundle_i.flash_mem_slave_req.addr;
+        wdata = bus_sniffer_bundle_i.flash_mem_slave_req.wdata;
+        be = bus_sniffer_bundle_i.flash_mem_slave_req.be;
+        
+        if (req && gnt) begin
+          idx = find_free_slot(table_tmp);
+          if (idx >= 0) begin
+            table_tmp[idx].free_slot           = 1'b1;
+            table_tmp[idx].waiting_resp        = ~we;
+            table_tmp[idx].channel_id          = FLASH;
+            table_tmp[idx].frame.source_id     = FLASH;
+            table_tmp[idx].frame.req_timestamp = timestamp_q;
+            table_tmp[idx].frame.address       = addr;
+            table_tmp[idx].frame.byte_enable   = be;
+            table_tmp[idx].frame.we            = we;
+            table_tmp[idx].frame.valid         = 1'b1;
+            table_tmp[idx].frame.gnt           = 1'b1;
+            if (we) begin
+              table_tmp[idx].frame.data           = wdata;
+              table_tmp[idx].frame.resp_timestamp = 16'h0001;
+            end else begin
+              table_tmp[idx].frame.data           = '0;
+              table_tmp[idx].frame.resp_timestamp = '0;
+            end
+          end
+        end
+      end
+
+      // Update the actual table
       for (int i = 0; i < TABLE_DEPTH; i++) begin
         transaction_table[i] <= table_tmp[i];
       end
     end
   end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   // On each clock, capture any responses. If we see rvalid for a channel,
   // we find the matching table entry that is waiting_resp=1 for that channel,
@@ -356,8 +618,8 @@ module bus_sniffer
 
       if (bus_sniffer_bundle_i.core_data_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == CORE_DATA) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -370,8 +632,8 @@ module bus_sniffer
       // CORE_INSTR
       if (bus_sniffer_bundle_i.core_instr_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == CORE_INSTR) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -384,8 +646,8 @@ module bus_sniffer
       // AO_PERIPH
       if (bus_sniffer_bundle_i.ao_peripheral_slave_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == AO_PERIPH) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -398,8 +660,8 @@ module bus_sniffer
       // PERIPH
       if (bus_sniffer_bundle_i.peripheral_slave_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == PERIPH) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -412,8 +674,8 @@ module bus_sniffer
       // RAM0
       if (bus_sniffer_bundle_i.ram_slave_resp[0].rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == RAM0) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -426,8 +688,8 @@ module bus_sniffer
       // RAM1
       if (bus_sniffer_bundle_i.ram_slave_resp[1].rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == RAM1) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -440,8 +702,8 @@ module bus_sniffer
       // FLASH
       if (bus_sniffer_bundle_i.flash_mem_slave_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == FLASH) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -454,8 +716,8 @@ module bus_sniffer
       // DMA
       if (bus_sniffer_bundle_i.dma_read_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == DMA_READ) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -468,8 +730,8 @@ module bus_sniffer
       // DMA
       if (bus_sniffer_bundle_i.dma_write_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == DMA_WRITE) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -482,8 +744,8 @@ module bus_sniffer
       // DMA
       if (bus_sniffer_bundle_i.dma_addr_resp.rvalid) begin
         for (int i = 0; i < TABLE_DEPTH; i++) begin
-          if (transaction_table[i].free_slot && 
-                        transaction_table[i].waiting_resp && 
+          if (transaction_table[i].free_slot &&
+                        transaction_table[i].waiting_resp &&
                         transaction_table[i].channel_id == DMA_ADDR) begin
 
             diff <= timestamp_q - transaction_table[i].frame.req_timestamp;
@@ -509,9 +771,9 @@ module bus_sniffer
     end
   end
 
-  //------------------------------------------------------------------------ 
+  //------------------------------------------------------------------------
   // FIFO Push logic
-  //------------------------------------------------------------------------ 
+  //------------------------------------------------------------------------
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -534,7 +796,7 @@ module bus_sniffer
 // ---------------------------------------------------------------------------
 // FIFO pop logic w/ DPI drain:
 //   priority
-//     1) DPI drain 
+//     1) DPI drain
 //     2) initial_pop (if clock gating)
 //     3) ack SW (FRAME_READ rising)
 // ---------------------------------------------------------------------------

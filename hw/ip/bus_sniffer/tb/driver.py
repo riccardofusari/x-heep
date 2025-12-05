@@ -11,8 +11,12 @@ class BusSource(Enum):
     CORE_DATA = 2
     AO_PERIPH = 3
     PERIPH = 4
+    RAM0 = 5
+    RAM1 = 6
+    FLASH = 7
     DMA_READ = 8
     DMA_WRITE = 9
+    DMA_ADDR = 10
 
 class OperationMode(Enum):
     SBA = 1
@@ -23,7 +27,7 @@ class XHeepSBADriver:
     def __init__(self, host='localhost', port=4444, mode=OperationMode.SBA):
         self.mode = mode
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        
+
         if self.mode == OperationMode.LEGACY:
             # For legacy mode, we use port 3333 (GDB port)
             self.socket.connect((host, 3333))
@@ -35,24 +39,24 @@ class XHeepSBADriver:
             print("✅ Connected to OpenOCD Telnet on port 4444")
             self._wait_for_prompt()
             self._resume_cpu()
-        
+
     def _setup_legacy_mode(self):
         """Setup GDB connection for legacy mode"""
         try:
             # Send initial GDB commands
             commands = [
                 "set target-async on",
-                "set pagination off", 
+                "set pagination off",
                 "set confirm off",
                 "set remotetimeout 2000",
                 "load"
             ]
-            
+
             for cmd in commands:
                 self._send_gdb_command(cmd)
-            
+
             print("✅ Legacy mode setup complete")
-            
+
         except Exception as e:
             print(f"❌ Legacy mode setup failed: {e}")
             raise
@@ -90,13 +94,13 @@ class XHeepSBADriver:
             except:
                 pass
             self.socket.settimeout(10.0)
-            
+
             # Send command
             full_command = f"{command}\n"
             self.socket.send(full_command.encode())
-            
+
             time.sleep(delay)
-            
+
             # Read response - GDB responses end with specific patterns
             response = b""
             start_time = time.time()
@@ -111,10 +115,10 @@ class XHeepSBADriver:
                         break
                 except socket.timeout:
                     continue
-            
+
             response_text = response.decode('utf-8', errors='ignore')
             return response_text
-            
+
         except Exception as e:
             raise Exception(f"GDB command failed: {e}")
 
@@ -170,7 +174,7 @@ class XHeepSBADriver:
         if self.mode != OperationMode.LEGACY:
             print("⚠️  Step operation only available in Legacy mode")
             return None
-            
+
         response = self._send_gdb_command("stepi")
         print("✅ CPU stepped one instruction")
         return response
@@ -207,7 +211,7 @@ class XHeepSBADriver:
         if self.mode != OperationMode.LEGACY:
             print("⚠️  Load operation only available in Legacy mode")
             return None
-            
+
         response = self._send_gdb_command("load")
         print("✅ Program loaded")
         return response
@@ -217,7 +221,7 @@ class XHeepSBADriver:
         if self.mode != OperationMode.LEGACY:
             print("⚠️  Breakpoints only available in Legacy mode")
             return None
-            
+
         response = self._send_gdb_command(f"break {location}")
         print(f"✅ Breakpoint set at {location}")
         return response
@@ -227,7 +231,7 @@ class XHeepSBADriver:
         if self.mode != OperationMode.SBA:
             print("⚠️  This method is for SBA mode only")
             return None
-            
+
         try:
             self.socket.settimeout(0.1)
             try:
@@ -236,12 +240,12 @@ class XHeepSBADriver:
             except:
                 pass
             self.socket.settimeout(10.0)
-            
+
             full_command = f"{command}\n"
             self.socket.send(full_command.encode())
-            
+
             time.sleep(delay)
-            
+
             response = b""
             start_time = time.time()
             while time.time() - start_time < 5.0:
@@ -254,9 +258,9 @@ class XHeepSBADriver:
                         break
                 except socket.timeout:
                     continue
-            
+
             response_text = response.decode('utf-8', errors='ignore')
-            
+
             lines = response_text.split('\n')
             clean_lines = []
             for line in lines:
@@ -266,12 +270,12 @@ class XHeepSBADriver:
                 if line.startswith(command):
                     continue
                 clean_lines.append(line)
-            
+
             return '\n'.join(clean_lines)
-            
+
         except Exception as e:
             raise Exception(f"OpenOCD command failed: {e}")
-    
+
     def enable_dpi(self):
         """Enable DPI Mode (SBA mode)"""
         print("🔍 Enabling DPI mode (SBA)...")
@@ -286,11 +290,11 @@ class XHeepSBADriver:
         """Write 32-bit word (SBA mode)"""
         if self.mode != OperationMode.SBA:
             return self.set_memory(address, value)
-            
+
         print("Generating Write Word traffic for sniffer monitoring...")
         self.performed_sba_writes.append((address, value))
         cmd = f"mww 0x{address:08x} 0x{value:08x}"
-        
+
         for attempt in range(retries):
             try:
                 response = self._send_command(cmd, delay=0.3)
@@ -309,17 +313,17 @@ class XHeepSBADriver:
                 else:
                     raise e
         return None
-    
+
     def read_word(self, address):
         """Read 32-bit word (SBA mode)"""
         if self.mode != OperationMode.SBA:
             print("⚠️  Read word operation optimized for SBA mode")
             # For legacy mode, you might use GDB memory examination
             return 0
-            
+
         cmd = f"mdw 0x{address:08x}"
         response = self._send_command(cmd)
-        
+
         match = re.search(r':\s*([0-9a-fA-F]+)', response)
         if match:
             hex_value = match.group(1)
@@ -329,9 +333,9 @@ class XHeepSBADriver:
                 return int(hex_value, 16)
             except ValueError:
                 raise Exception(f"Failed to parse hex value: {hex_value}")
-        
+
         raise Exception(f"Failed to parse read response: '{response}'")
-    
+
     def write_burst(self, address, data_list):
         """Write multiple words"""
         success_count = 0
@@ -355,13 +359,13 @@ class XHeepSBADriver:
             except Exception as e:
                 print(f"   ❌ Failed write: addr=0x{address + i*4:08x} error: {e}")
         return success_count
-    
+
     def read_burst(self, address, count):
         """Read multiple words (SBA mode only)"""
         if self.mode != OperationMode.SBA:
             print("⚠️  Burst read optimized for SBA mode")
             return []
-            
+
         results = []
         for i in range(count):
             try:
@@ -372,7 +376,7 @@ class XHeepSBADriver:
                 print(f"   ❌ Failed read: addr=0x{address + i*4:08x} error: {e}")
                 results.append(0xDEADBEEF)
         return results
-    
+
     def test_connection(self):
         """Test if connection is working"""
         try:
@@ -392,13 +396,13 @@ class XHeepSBADriver:
         except Exception as e:
             print(f"❌ Connection test FAILED: {e}")
             return False
-    
+
     def generate_instruction_traffic(self, base_addr=0x20010000, count=3):
         """Generate instruction fetch-like traffic (SBA mode only)"""
         if self.mode != OperationMode.SBA:
             print("⚠️  Instruction traffic generation optimized for SBA mode")
             return []
-            
+
         print("📖 Generating instruction traffic...")
         transactions = []
         for i in range(count):
@@ -416,7 +420,7 @@ class XHeepSBADriver:
             except Exception as e:
                 print(f"   ❌ Failed instruction read: addr=0x{addr:08x} error: {e}")
         return transactions
-    
+
     def generate_read_only_traffic(self, addresses):
         """Generate traffic using only reads"""
         print("🔍 Generating read-only traffic...")
@@ -433,7 +437,7 @@ class XHeepSBADriver:
                 time.sleep(0.05)
             except Exception as e:
                 print(f"   ❌ Failed read {i+1}: addr=0x{addr:08x} error: {e}")
-    
+
         #
     # --- GDB Remote Serial Protocol (RSP) helpers (for LEGACY mode) ---
     #
@@ -564,7 +568,7 @@ class XHeepSBADriver:
         value = struct.unpack("<I", data_bytes)[0]
         print(f"   📝 GDB Read: addr=0x{address:08X} data=0x{value:08X}")
         return value
-    
+
     def _gdb_read_burst(self, address: int, num_words: int):
         """
         Read multiple 32-bit words starting at address using consecutive RSP 'm' reads.
@@ -645,7 +649,7 @@ class XHeepSBADriver:
         payload, sig = self._gdb_wait_for_stop(timeout=timeout)
         return sig, payload
 
-# driver.write_burst(0x00000000, burst_data)      
+# driver.write_burst(0x00000000, burst_data)
 # driver.write_burst(0x2002FFF8, burst_data)
 # driver.write_burst(0x00000ED4, burst_data)
     def run_fifo_test_via_gdb(self):
@@ -670,7 +674,7 @@ class XHeepSBADriver:
         time.sleep(0.05)
         self._gdb_read_burst(0x2002FFF8, len(burst_data))
         time.sleep(0.05)
-        
+
 
         fifo_ctl_addr = 0x30080000
         # Reset FIFO (0x2)
@@ -705,33 +709,33 @@ class XHeepSBADriver:
         if self.mode != OperationMode.LEGACY:
             print("⚠️  This sequence is for Legacy mode only")
             return
-            
+
         print("🚀 Running legacy command sequence...")
-        
+
         # Your specified command sequence
         commands = [
             # "$MADDR,LEN:DATA#CS", #"load"
             "$c#",
             "$M03080000,4:00000002#CS", # "set *(int*)0x30080000 = 0x2"
             "$M03080000,4:00000001#CS", # "set *(int*)0x30080000 = 0x2"
-            "$c#"                       
+            "$c#"
             # "break main",
             # "set *(int*)0x30080000 = 0x2",
              # "set *(int*)0x30080000 = 0x2",
             # "c",
             # "info reg pc",
-            # "set *(int*)0x30080000 = 0x2", 
+            # "set *(int*)0x30080000 = 0x2",
             # "set *(int*)0x30080000 = rrr0x1",
             # "c"
         ]
-        
+
         for cmd in commands:
             print(f"Executing: {cmd}")
             response = self._send_gdb_packet(cmd)
             if response:
                 print(f"Response: {response[:100]}...")  # Print first 100 chars
             time.sleep(0.5)
-    
+
     def close(self):
         """Close connection"""
         try:
@@ -741,3 +745,12 @@ class XHeepSBADriver:
             pass
         self.socket.close()
         print("🔌 Connection closed")
+
+    def run_sniffer_test_legacy_mode(self):
+        """Run bus sniffer test with Legacy Mode (GDB)"""
+        if self.mode != OperationMode.LEGACY:
+            print("❌ This test requires Legacy Mode (GDB on port 3333)")
+            return
+        
+        from sniffer_test_legacy import run_sniffer_test_legacy
+        run_sniffer_test_legacy(self)
